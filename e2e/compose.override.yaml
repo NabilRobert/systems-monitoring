@@ -1,0 +1,52 @@
+# Layered over deploy/compose.yaml by the end-to-end test. Everything not
+# changed here (images, hardening, memory caps, the routing tree) is the
+# production configuration. What changes:
+# - Alertmanager's Telegram receiver points at a local stand-in (its
+#   config is a copy with only `api_url` replaced), with dummy secrets;
+# - authwatch reads a synthetic log and a synthetic socket table instead
+#   of the host's, and joins the compose network instead of the host's.
+# Paths are relative to deploy/, the first compose file's directory.
+name: systems-monitoring-e2e
+
+services:
+  telegram-stub:
+    image: python:3.14.10-slim@sha256:3cabfd7d7aaf394e6040e79fa1eec6ca1c52b74ed9188650472695d9a9326999
+    command: ["python", "/stub/telegram_stub.py"]
+    volumes:
+      - ../e2e/telegram_stub.py:/stub/telegram_stub.py:ro
+      - ../e2e/out/messages:/out
+    read_only: true
+    cap_drop: [ALL]
+    mem_limit: 64m
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:8080/x/getMe', b'{}'))"]
+      interval: 2s
+      retries: 15
+
+  alertmanager:
+    ports: !reset []
+    volumes: !override
+      - ../e2e/out/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./alertmanager/templates:/etc/alertmanager/templates:ro
+      - ../e2e/out/secrets:/etc/alertmanager/secrets:ro
+    depends_on:
+      telegram-stub:
+        condition: service_healthy
+
+  authwatch:
+    network_mode: !reset null
+    group_add: !reset []
+    env_file: !reset []
+    volumes: !override
+      - ../e2e/out/log:/host/log:ro
+      - ../e2e/out/net:/fake/net:ro
+    environment:
+      AUTHWATCH_ALERTMANAGER_URL: http://alertmanager:9093
+      AUTHWATCH_PROC_NET: /fake/net
+      AUTHWATCH_HOST_LABEL: e2e-host
+      AUTHWATCH_ALLOWED_PORTS: "22"
+      AUTHWATCH_KNOWN_NETWORKS: 192.0.2.0/24
+      AUTHWATCH_PORT_INTERVAL_SECONDS: "5"
+      AUTHWATCH_POLL_INTERVAL_SECONDS: "0.5"
+      AUTHWATCH_RUNBOOK_BASE: https://example.org/runbooks
+      TZ: Asia/Jakarta
