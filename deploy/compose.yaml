@@ -1,4 +1,5 @@
 # The always-on monitoring stack, slice 1: security alerts.
+# Vector detects (vector/vector.yaml); Alertmanager delivers to Telegram.
 # Run from this directory: `docker compose up -d` (docs/runbook-deploy.md).
 # Nothing here is reachable from outside the server.
 name: systems-monitoring
@@ -27,7 +28,7 @@ services:
     restart: unless-stopped
 
   vector:
-    # Spike: the same rules as authwatch, as Vector configuration (ADR-006).
+    # The six security rules, as Vector configuration (ADR-006).
     image: timberio/vector:0.59.0-alpine@sha256:0e36bc2a290039e9b6a5e92f04bd2f133223506f72d09682c1df16c015172b7a
     command: ["--config", "/etc/vector/vector.yaml"]
     # The host's network namespace: /proc/net/tcp lists the host's
@@ -40,7 +41,7 @@ services:
       - /var/log:/host/log:ro
     env_file: .env
     environment:
-      AUTHWATCH_PROC_NET: /proc/net
+      SECURITY_PROC_NET: /proc/net
     read_only: true
     # Vector's checkpoints: lost on restart, so it starts at the log's end.
     tmpfs: ["/var/lib/vector:size=4m,uid=65534,gid=65534"]
@@ -49,6 +50,11 @@ services:
     # Measured idle without a cap: 66 MiB; at 64 MB it sat at the cap.
     mem_limit: 96m
     pids_limit: 64
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8686/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     depends_on: [alertmanager]
     restart: unless-stopped
 

@@ -3,8 +3,9 @@
 # production configuration. What changes:
 # - Alertmanager's Telegram receiver points at a local stand-in (its
 #   config is a copy with only `api_url` replaced), with dummy secrets;
-# - authwatch reads a synthetic log and a synthetic socket table instead
-#   of the host's, and joins the compose network instead of the host's.
+# - Vector reads a synthetic log and a synthetic socket table instead
+#   of the host's, and shares Alertmanager's network namespace instead of
+#   the host's (so 127.0.0.1:9093 still reaches Alertmanager).
 # Paths are relative to deploy/, the first compose file's directory.
 name: systems-monitoring-e2e
 
@@ -44,9 +45,9 @@ services:
       - ../e2e/out/log:/host/log:ro
       - ../e2e/out/net:/fake/net:ro
     environment:
-      AUTHWATCH_PROC_NET: /fake/net
-      AUTHWATCH_HOST_LABEL: e2e-host
-      AUTHWATCH_ALLOWED_PORTS: "22"
-      AUTHWATCH_KNOWN_NETWORKS: 192.0.2.0/24
-      AUTHWATCH_RUNBOOK_BASE: https://example.org/runbooks
+      SECURITY_PROC_NET: /fake/net
+      SECURITY_HOST_LABEL: e2e-host
+      SECURITY_ALLOWED_PORTS: "22"
+      SECURITY_KNOWN_NETWORKS: 192.0.2.0/24
+      SECURITY_RUNBOOK_BASE: https://example.org/runbooks
       TZ: Asia/Jakarta

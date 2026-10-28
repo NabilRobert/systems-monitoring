@@ -1,18 +1,28 @@
-# Security alerts with Vector instead of custom code (spike, Phase 5 ADR-006).
+# Security alerts: six detection rules as Vector configuration (Phase 5,
+# ADR-006). Vector reads the logs and the socket table; Alertmanager
+# (deploy/alertmanager/) groups and delivers what comes out.
 #
-# The same six rules as authwatch, as Vector configuration:
 #   auth log ─► parse ─┬─ events (login, sudo, sudo refused) ─────────────► to_alertmanager
 #                      └─ failed logins ─► one per connection ─┬─ burst ─► throttle ─┘
 #                                                              └─ flood ─► throttle ─┘
 #   /proc/net/tcp{,6} every 30 s ─► listeners outside the allow-list ───────┘
 #
 # The names and lists (host label, allowed ports, known networks) come from
-# AUTHWATCH_* environment variables at run time. The thresholds and windows
-# are numbers in this file: Vector doesn't expand ${...} in its config
-# unless a flag named --dangerously-allow-env-var-interpolation is set.
-# `vector test` runs the unit tests in vector-tests.yaml.
+# SECURITY_* environment variables at run time (deploy/.env.example). The
+# thresholds and windows are numbers in this file: Vector doesn't expand
+# ${...} in its config unless a flag named
+# --dangerously-allow-env-var-interpolation is set, and it isn't.
+#
+# Unit tests for each rule: deploy/vector/tests/ (run by
+# e2e/test_vector_rules.py).
 
 data_dir: /var/lib/vector
+
+# Only for the container's health check, on loopback (ignored by the port
+# rule, which skips loopback listeners).
+api:
+  enabled: true
+  address: 127.0.0.1:8686
 
 sources:
   auth_log:
@@ -32,7 +42,7 @@ sources:
       exec_interval_secs: 30
     # A shell, so the directory can come from the environment (tests point
     # it at a synthetic table).
-    command: ["sh", "-c", 'cat "${AUTHWATCH_PROC_NET:-/proc/net}/tcp" "${AUTHWATCH_PROC_NET:-/proc/net}/tcp6"']
+    command: ["sh", "-c", 'cat "${SECURITY_PROC_NET:-/proc/net}/tcp" "${SECURITY_PROC_NET:-/proc/net}/tcp6"']
     decoding:
       codec: bytes
 
@@ -52,14 +62,11 @@ transforms:
       if err == null {
         . = merge({"kind": "login", "line": line, "timestamp": received}, accepted)
       } else {
+        # "Failed … for invalid user X from" doesn't match the first pattern
+        # (it expects "for X from"): that attempt is counted once, by its
+        # "Invalid user" line.
         failed, err = parse_regex(msg, r'^sshd(?:-session)? (?:Failed \S+ for (?P<user>\S+) from (?P<addr>\S+)(?: port (?P<port>\d+))?|Invalid user (?P<user2>\S*) from (?P<addr2>\S+)(?: port (?P<port2>\d+))?|(?:Connection closed by|Disconnected from) (?:authenticating|invalid) user (?P<user3>\S*) (?P<addr3>\S+) port (?P<port3>\d+) \[preauth\])')
         if err == null {
-          # A failed password for an invalid user is counted by its
-          # "Invalid user" line instead.
-          if starts_with(msg, "sshd Failed") && contains(msg, " for invalid user ") ||
-             starts_with(msg, "sshd-session Failed") && contains(msg, " for invalid user ") {
-            abort
-          }
           addr = failed.addr
           if addr == null { addr = failed.addr2 }
           if addr == null { addr = failed.addr3 }
@@ -90,14 +97,14 @@ transforms:
     inputs: [by_kind.event]
     source: |
       ends_at = format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) + 300), format: "%+")
-      labels = {"host": get_env_var("AUTHWATCH_HOST_LABEL") ?? "server", "user": .user, "event_id": uuid_v4()}
+      labels = {"host": get_env_var("SECURITY_HOST_LABEL") ?? "server", "user": .user, "event_id": uuid_v4()}
       command = to_string(.command) ?? ""
       if length(command) > 200 { command = slice!(command, 0, 199) + "…" }
       # VRL scopes variables to their block, so these are declared first.
       summary = ""
       runbook = ""
       if .kind == "login" {
-        networks = filter(split(get_env_var("AUTHWATCH_KNOWN_NETWORKS") ?? "", ",")) -> |_i, v| { strip_whitespace(v) != "" }
+        networks = filter(split(get_env_var("SECURITY_KNOWN_NETWORKS") ?? "", ",")) -> |_i, v| { strip_whitespace(v) != "" }
         known = false
         for_each(networks) -> |_i, net| {
           if ip_cidr_contains(strip_whitespace(string(net) ?? ""), string(.addr) ?? "") ?? false { known = true }
@@ -122,7 +129,7 @@ transforms:
       }
       . = {
         "labels": labels,
-        "annotations": {"summary": summary, "runbook_url": (get_env_var("AUTHWATCH_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/" + runbook + ".md"},
+        "annotations": {"summary": summary, "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/" + runbook + ".md"},
         "endsAt": ends_at,
       }
 
@@ -162,10 +169,10 @@ transforms:
       if span > window { abort }
       . = {
         "addr": .addr,
-        "labels": {"alertname": "SSHFailedLoginBurst", "severity": "ticket", "host": get_env_var("AUTHWATCH_HOST_LABEL") ?? "server", "source": .addr, "event_id": uuid_v4()},
+        "labels": {"alertname": "SSHFailedLoginBurst", "severity": "ticket", "host": get_env_var("SECURITY_HOST_LABEL") ?? "server", "source": .addr, "event_id": uuid_v4()},
         "annotations": {
           "summary": to_string(length(times)) + " failed SSH logins from " + string!(.addr) + " in " + to_string(window) + " s",
-          "runbook_url": (get_env_var("AUTHWATCH_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/ssh-failed-logins.md",
+          "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/ssh-failed-logins.md",
         },
         "endsAt": format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) + 300), format: "%+"),
       }
@@ -203,10 +210,10 @@ transforms:
       if span > window { abort }
       sources = length(array(.addr) ?? [.addr])
       . = {
-        "labels": {"alertname": "SSHFailedLoginFlood", "severity": "ticket", "host": get_env_var("AUTHWATCH_HOST_LABEL") ?? "server", "event_id": uuid_v4()},
+        "labels": {"alertname": "SSHFailedLoginFlood", "severity": "ticket", "host": get_env_var("SECURITY_HOST_LABEL") ?? "server", "event_id": uuid_v4()},
         "annotations": {
           "summary": to_string(length(times)) + " failed SSH logins from " + to_string(sources) + " addresses in " + to_string(window / 60) + " min",
-          "runbook_url": (get_env_var("AUTHWATCH_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/ssh-failed-logins.md",
+          "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/ssh-failed-logins.md",
         },
         "endsAt": format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) + 300), format: "%+"),
       }
@@ -237,10 +244,10 @@ transforms:
       }
       address = ip_ntop!(decode_base16!(join(words)))
       is_loopback = ip_cidr_contains!(["127.0.0.0/8", "::1/128", "::ffff:127.0.0.0/104"], address)
-      ignore_loopback = downcase(get_env_var("AUTHWATCH_IGNORE_LOOPBACK") ?? "true") != "false"
+      ignore_loopback = downcase(get_env_var("SECURITY_IGNORE_LOOPBACK") ?? "true") != "false"
       if is_loopback && ignore_loopback { abort }
       allowed = false
-      for_each(split(get_env_var("AUTHWATCH_ALLOWED_PORTS") ?? "22", ",")) -> |_i, entry| {
+      for_each(split(get_env_var("SECURITY_ALLOWED_PORTS") ?? "22", ",")) -> |_i, entry| {
         entry = strip_whitespace(entry)
         # VRL evaluates || and && left to right, so the brackets matter.
         if entry == to_string(port) || (ends_with(entry, ":" + to_string(port)) && contains(entry, address)) {
@@ -251,10 +258,10 @@ transforms:
       shown = if contains(address, ":") { "[" + address + "]" } else { address }
       interval = 30
       . = {
-        "labels": {"alertname": "NewListeningPort", "severity": "page", "host": get_env_var("AUTHWATCH_HOST_LABEL") ?? "server", "address": address, "port": to_string(port)},
+        "labels": {"alertname": "NewListeningPort", "severity": "page", "host": get_env_var("SECURITY_HOST_LABEL") ?? "server", "address": address, "port": to_string(port)},
         "annotations": {
           "summary": "New listening TCP port " + shown + ":" + to_string(port) + ", not in the allow-list",
-          "runbook_url": (get_env_var("AUTHWATCH_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/new-listening-port.md",
+          "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/new-listening-port.md",
         },
         "endsAt": format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) + 3 * interval), format: "%+"),
       }
