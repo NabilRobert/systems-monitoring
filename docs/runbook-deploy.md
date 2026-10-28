@@ -1,4 +1,4 @@
-# Deploy runbook: security alerts (slice 1)
+# Deploy runbook: security alerts (slice 1), metrics and probes (slice 3)
 
 For Arthur, on the shared server. About an hour, most of it step 7.
 Nothing in this repo deploys itself; every step is run by hand.
@@ -6,7 +6,7 @@ Nothing in this repo deploys itself; every step is run by hand.
 **What gets installed:** two containers, both read-only, with no
 capabilities and nothing reachable from outside:
 - `alertmanager` (capped at 48 MB), on `127.0.0.1:9093` only;
-- `vector` (capped at 96 MB), which reads `/var/log` read-only and the host's
+- `vector` (capped at 128 MB), which reads `/var/log` read-only and the host's
   `/proc/net/tcp`, and listens only on loopback (its health check).
 
 **What it never does:** change the firewall, SSH, accounts or any other
@@ -91,7 +91,7 @@ chmod 600 .env
 ```
 
 Edit `.env`:
-- `SECURITY_HOST_LABEL`: a name for the server in messages, not its real
+- `HOST_LABEL`: a name for the server in messages, not its real
   hostname.
 - `AUTH_LOG_GID`: the number from step 3.
 - `SECURITY_KNOWN_NETWORKS`: leave empty at first, so every login buzzes.
@@ -173,6 +173,60 @@ the flood threshold above the busiest normal 10 minutes: in
 `threshold = 200` (`flood_alerts`), then `docker compose up -d vector`. The aim: a flood message means
 something unusual.
 
+## 9. Slice 3: metrics, uptime probes and their alerts
+
+Adds three containers (VictoriaMetrics 128 MB, vmalert 32 MB, blackbox
+32 MB; all read-only, no capabilities, only VictoriaMetrics published, on
+`127.0.0.1:8428`) and host metrics from the existing Vector. The
+always-on total becomes 368 MB of caps.
+
+1. **Update:** `git pull` in `~/systems-monitoring`.
+2. **Probe targets:** the domains stay on the server, never in git.
+
+   ```bash
+   cp targets/apps.yml.example targets/apps.yml
+   ```
+
+   Fill in the two domains. Each entry's `app` label is what the alerts
+   and SLOs use. Add Juku here once it's live.
+3. **Check the rules file** loads (this checks the rules only; step 4's
+   `docker compose ps` shows whether vmalert itself started):
+
+   ```bash
+   docker compose run --rm --no-deps --entrypoint /vmalert-prod vmalert -rule=/etc/vmalert/rules.yml -dryRun
+   ```
+
+4. **Start:** `docker compose up -d`. `vector` is recreated (it now also
+   reads the host's `/proc` and `/sys`, read-only). Then
+   `docker compose ps`: all five `Up`.
+5. **Look:** through an SSH tunnel from your laptop,
+   `ssh -L 8428:127.0.0.1:8428 <server>`, open
+   `http://127.0.0.1:8428/vmui` and query:
+   - `probe_success`: one series per app, value `1`;
+   - `host_filesystem_used_ratio{mountpoint="/"}`: the disk's fill level;
+   - `host_cgroup_memory_current_bytes`: one series per container.
+6. **Fire AppDown once** without touching a real app: add a target that
+   can't succeed to `targets/apps.yml`,
+
+   ```yaml
+   - targets: ["https://<pitstop-demo-domain>/no-such-page"]
+     labels:
+       app: drill
+   ```
+
+   wait (VictoriaMetrics reloads targets within a minute; the alert needs
+   3 minutes of failures), and expect 🔴 **AppDown** about 4–5 minutes
+   later. Remove the entry, and ✅ Resolved follows within a few minutes.
+7. **Record** `docker stats --no-stream --format '{{.Name}} {{.MemUsage}}'`
+   and send the session the five memory numbers and the AppDown delay
+   (no domains or addresses).
+
+**Known limits** (in the runbooks too):
+- Everything runs on the server it watches: if the whole server goes
+  down, nothing here can say so. An outside check needs an account
+  (slice plan, later).
+- The disk alert watches the filesystem holding `/`.
+
 ## Day to day
 
 - **Maintenance with lots of sudo:** silence it for the duration instead
@@ -183,6 +237,8 @@ something unusual.
   ```
 
 - **Monthly drill**, on the 1st: step 7 row 1 (test-alert).
+- **Silences cover vmalert's alerts too**, for example during a planned
+  restart: `amtool silence add app=pitstop-demo --duration=30m …`.
 - **Updating:** `git pull`, then `docker compose up -d --build`.
 - **Images** are pinned by digest in `compose.yaml` and the Dockerfile;
   update them by changing the digest in a branch, not on the server.
@@ -193,7 +249,8 @@ something unusual.
 docker compose down
 ```
 
-This stops and removes both containers; the server is as it was, apart
-from the `deploy/.env` and `deploy/secrets/` files you created (delete
-them if you're removing it for good). To revoke the bot, send `/revoke`
+This stops and removes every container. What stays: the files you
+created (`deploy/.env`, `deploy/targets/apps.yml`, `deploy/secrets/`;
+delete them if you're removing it for good) and the stored metrics and
+Alertmanager state (`docker compose down -v` removes those too). To revoke the bot, send `/revoke`
 to @BotFather.
