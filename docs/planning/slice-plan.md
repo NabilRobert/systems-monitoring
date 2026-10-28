@@ -22,7 +22,8 @@ tested. Every slice costs $0.
 **Order:** 0 → 1 → (2, Arthur) → 3 → 4 → checkpoint → Juku launches →
 5 → 6 → 7 → 8. Slices 3 and 4 don't depend on each other.
 
-**Progress (2026-10-28):** slice 0 done.
+**Progress (2026-10-28):** slices 0 and 1 done, locally; the deploy
+runbook for slice 2 is written. Nothing is deployed.
 
 ## Fixed before building (so no choice is made after seeing results)
 
