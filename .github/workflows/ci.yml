@@ -1,7 +1,8 @@
 # Lint, type-check and test on every push to main and every pull request.
-# `check` needs nothing but Python. `e2e` runs the production compose file
-# in Docker with a stand-in for Telegram's API: no secrets, no network
-# beyond pulling the pinned images.
+# `check` needs nothing but Python. `e2e` runs the rule unit tests (Vector,
+# vmalert) and the production compose file in Docker, with a stand-in for
+# Telegram's API and a stand-in app to probe: no secrets, no network beyond
+# pulling the pinned images.
 name: CI
 
 on:
@@ -29,7 +30,9 @@ jobs:
 
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The rule tests replay 3 days (about 4 minutes) and the app-outage test
+    # waits for a real 3-minute outage, so this job takes about 15 minutes.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6

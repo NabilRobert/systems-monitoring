@@ -28,3 +28,6 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# Probe targets name real domains: kept on the server only
+deploy/targets/*.yml

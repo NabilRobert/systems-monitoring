@@ -38,6 +38,13 @@ route:
       receiver: telegram-ticket
       repeat_interval: 24h
 
+# While an app is down, its SLO burn alerts add nothing: the outage is the
+# news, and AppDown's runbook covers it.
+inhibit_rules:
+  - source_matchers: ['alertname="AppDown"']
+    target_matchers: ['slo="availability"']
+    equal: [app]
+
 receivers:
   - name: telegram-page
     telegram_configs:
