@@ -87,7 +87,7 @@ the first slice (security alerts) now; the rest in slices (see
 ## Non-functional requirements
 
 - **NF1. Memory:** every container has a hard cap. The always-on stack
-  (Alertmanager, the security watcher, probes, metrics) stays under
+  (Alertmanager, the security detector, probes, metrics) stays within
   **384 MB of caps** in total; GlitchTip, if it passes its gate, gets at
   most 256 MB more. Idle and busy memory are measured and published.
 - **NF2. Loopback only:** no monitoring UI or API is published on a

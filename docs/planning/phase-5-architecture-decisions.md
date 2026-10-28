@@ -6,7 +6,7 @@ memory caps**, so every choice is judged first on memory, then on moving
 parts.
 
 ```
- auth log, /proc/net/tcp ──► authwatch ─────────────────────┐   (security, slice 1)
+ auth log, /proc/net/tcp ──► Vector (detector) ─────────────┐   (security, slice 1)
                                                             │
  blackbox_exporter ─┐                                       │
  node_exporter ─────┼─► VictoriaMetrics ─► vmalert ─────────┤   (probes, host, containers)
@@ -21,7 +21,7 @@ parts.
 ### ADR-001: Alertmanager is the only delivery path
 
 **Decision:** every source sends alerts to one Alertmanager:
-- `authwatch` and `slo-check` post to its HTTP API;
+- the security detector (ADR-006) and `slo-check` post to its HTTP API;
 - `vmalert` evaluates metric rules and posts to it;
 - Juku's Grafana, if Juku keeps it, uses Alertmanager as its contact
   point instead of talking to Telegram itself.
@@ -150,59 +150,73 @@ collector.
   host memory, disk, other apps or probes.
 - *A hosted metrics service:* an account, and data leaving the server.
 
-### ADR-006: authwatch, a small log watcher that posts to Alertmanager
+### ADR-006: Security detection with Vector, not custom code (open: needs Arthur's OK)
 
-**Decision:** a single-purpose Python service, standard library only:
-- **Reads** the system auth log (mounted read-only), following it
-  through rotation, starting at the end so old lines never alert.
-  Understands both the classic syslog and the RFC 3339 timestamp formats.
-  On hosts without a log file it reads `journalctl -f -o short-iso` from
-  standard input instead.
-- **Detects:**
+**The rules** (the same whichever tool runs them):
 
-  | Alert | From | Severity |
-  |---|---|---|
-  | `SSHLogin` | `Accepted <method> for <user> from <addr>` | `page`; `ticket` from a configured known network |
-  | `SudoCommand` | `sudo: <user> : … COMMAND=…` | `page` |
-  | `SudoAuthFailure` | `sudo: <user> : … incorrect password attempt(s)` | `page` |
-  | `SSHFailedLoginBurst` | ≥ 20 failed logins from one address in 60 s | `ticket` |
-  | `SSHFailedLoginFlood` | ≥ 200 failed logins from all addresses in 10 min | `ticket` |
-  | `NewListeningPort` | ADR-007 | `page` |
+| Alert | From | Severity |
+|---|---|---|
+| `SSHLogin` | `Accepted <method> for <user> from <addr>` | `page`; `ticket` from a configured known network |
+| `SudoCommand` | `sudo: <user> : … COMMAND=…` | `page` |
+| `SudoAuthFailure` | `sudo: <user> : … incorrect password attempt(s)` | `page` |
+| `SSHFailedLoginBurst` | ≥ 20 failed logins from one address in 60 s | `ticket` |
+| `SSHFailedLoginFlood` | ≥ 200 failed logins from all addresses in 10 min | `ticket` |
+| `NewListeningPort` | ADR-007 | `page` |
 
-- **Sends** each event to Alertmanager's API as its own alert (a unique
-  `event_id` label), with `endsAt` five minutes later, so one event is one
-  message and never "resolves" noisily. Grouping by `alertname` folds a
-  flurry of `sudo` commands into one message.
-- **Labels** carry a configured host name (never the real hostname from
-  the line), the user and the source address. Messages go only to Arthur.
-- **If Alertmanager is down,** events wait in a bounded queue (1,000) and
-  are retried with backoff. A full queue drops the oldest and counts it.
+Each event is its own Alertmanager alert (a unique `event_id`), ending
+five minutes later, so one event is one message and never "resolves".
+Labels carry a configured host name, never the real hostname. Failed
+logins are `ticket` because with key-only SSH they can't succeed and
+every public server is scanned all day; a *successful* login and every
+`sudo` page.
 
-**Why failed logins are `ticket`, not `page`:** with key-only SSH, a
-failed attempt can't succeed, and every public server sees background
-scanning all day. Paging on it would teach Arthur to ignore the channel.
-What matters is a *success* (`SSHLogin`) or `sudo`, and those page every
-time. The burst thresholds are calibrated on the server's real rate in
-the first week (the runbook has the command).
+**Options considered** (reuse before building; checked 2026-10-28):
 
-**Why:** about 20 MB, one file of rules that a reviewer can read, and
-every rule tested on synthetic lines.
+| Option | Licence, upkeep | Covers | Memory | Verdict |
+|---|---|---|---|---|
+| Arthur's own repos | — | Nothing: no log detection or alert delivery anywhere (grep across the folder) | — | Nothing to reuse |
+| **Vector** 0.59 (log pipeline) | MPL-2.0; Datadog, monthly releases | **All six rules:** file tailing with rotation, regex parsing, per-connection dedupe, windows (`reduce` + `throttle`), an `exec` source for the socket table, an HTTP sink with a bounded retry buffer | **66 MiB idle**, measured | **Recommended** |
+| Fluent Bit | Apache-2.0, CNCF | Tailing, parsing, HTTP out; but counting in a window needs a Lua script, which is custom code again | ~10 MiB (commonly reported) | Close second |
+| fail2ban, notify-only | GPL-2.0, active | Failed-login bursts only (a true sliding window). Logins and `sudo` would mean abusing a ban engine with `maxretry=1`; actions are shell commands | ~40–60 MiB | Partial; and it is built to block |
+| CrowdSec engine, no bouncer | MIT, active | Community brute-force scenarios and an HTTP notifier; no scenarios for successful logins or `sudo`. Shares signals with its central API unless turned off | ~60–120 MiB | Partial; privacy setting to manage |
+| mtail | Apache-2.0, Google | Logs to metrics; needs the metrics store (slice 3), and one series per scanning address | small | Later at best |
+| Promtail + Loki ruler | Promtail is end-of-life (replaced by Alloy) | Would store the logs again (a non-goal) | 100s of MiB | No |
+| grok_exporter | Unmaintained since 2021 | — | — | No |
+| Wazuh, OSSEC | GPL | A full SIEM | Wazuh well over 1 GB | No |
+| A PAM or `sshrc` hook | — | Logins only | — | Changes the server's authentication settings: no |
+| Custom (`authwatch`, built first) | Ours | All six, exact sliding windows | **19 MiB** peak, measured | Only if Vector is refused |
 
-**Rejected:**
-- *Vector or Fluent Bit → metrics → vmalert rules:* light, but per-event
-  alerts with the user and address need high-cardinality labels or a
-  log-to-alert bridge, and the rules would be split across two configs.
-- *Loki + Promtail with ruler alerts:* stores the logs again (a non-goal)
-  and costs hundreds of megabytes.
-- *Wazuh or OSSEC:* a full SIEM, well over a gigabyte for Wazuh.
-- *CrowdSec or fail2ban:* built to *block*, which changes firewall state.
-  This project only detects (Phase 2, S3).
-- *A PAM or `sshrc` hook that sends a message on login:* it changes the
-  server's authentication configuration, which is a security setting.
+**The spike** (branch `spike/vector-detectors`): the same six rules as
+Vector configuration, run against **the same 8 end-to-end tests** as the
+custom version, in the same Docker harness. All 8 pass; every message
+arrived in 16–27 s.
+
+| | Vector | authwatch |
+|---|---|---|
+| Code to maintain | ~290 lines of YAML and VRL | ~750 lines of Python, 65 unit tests |
+| Memory (measured) | 66 MiB idle, cap 96 MB | 19 MiB peak, cap 48 MB |
+| Burst and flood windows | Close to a sliding window (a group that starts slowly is dropped and the count restarts) | Exact sliding window |
+| Settings | Names and lists from the environment; thresholds are numbers in the config file (Vector no longer expands `${…}` in its config unless a flag named `--dangerously-allow-env-var-interpolation` is set) | All from the environment |
+| Unit tests | `vector test` cases in the config (to write) | pytest |
+
+**Recommendation: Vector.** It does the whole job, it is a standard tool
+an operations team will recognise, and it removes a hand-written parser,
+follower, queue and retry loop. The costs are 47 MB more memory (the
+always-on total becomes 384 MB, exactly the Phase 2 budget) and
+approximate windows on two `ticket` alerts that are calibrated by hand
+anyway. **If Arthur declines** (it is new to his stack), authwatch stays,
+reworked to his framework stack (Typer, pydantic-settings, httpx,
+tenacity) as the "Frameworks over plain code" rule asks.
+
+**Traps found in the spike, for the record:** VRL scopes variables to
+their block; it evaluates `a || b && c` left to right; the HTTP sink's
+`json` codec already sends a batch as a JSON array (adding `[`…`]` made
+Alertmanager answer 400 and drop the batch); and Vector's data directory
+must be writable by its user.
 
 ### ADR-007: New listening ports come from a socket snapshot, not logs
 
-**Decision:** every 30 s, `authwatch` reads the host's `/proc/net/tcp` and
+**Decision:** every 30 s, the detector (ADR-006) reads the host's `/proc/net/tcp` and
 `/proc/net/tcp6` (the container uses the host's network namespace,
 read-only, no capabilities) and alerts on any listening socket not in an
 allow-list (`22`, `80`, `443`, and so on, set on the server). The alert
@@ -220,6 +234,9 @@ listening socket on the host. The runbook adds a weekly
 
 **Rejected:**
 - *Running `ss -ltn`:* needs `iproute2` in the image for the same data.
+- *osquery's `listening_ports` table:* the same data, with a daemon of
+  its own and access to the host's processes.
+- *Falco:* needs a privileged container or eBPF access.
 - *auditd rules on `bind()`:* changes the kernel's audit configuration (a
   security setting) and is very noisy.
 - *An outside port scan:* sees only what's open past the firewall, needs
@@ -324,13 +341,13 @@ where it stops.
 | Container | Cap | Slice |
 |---|---|---|
 | `alertmanager` | 48 MB | 1 |
-| `authwatch` | 48 MB | 1 |
+| Detector: Vector (`authwatch`: 48 MB) | 96 MB | 1 |
 | `blackbox` | 32 MB | 3 |
 | `victoriametrics` | 128 MB | 4 |
 | `vmalert` | 32 MB | 4 |
 | `node-exporter` (with the cgroup textfile script) | 48 MB | 4 |
 | `slo-check` (runs every 5 min, exits) | 48 MB | 6 |
-| **Always-on total** | **336 MB** (Phase 2, NF1: under 384) | |
+| **Always-on total** | **384 MB** with Vector, 336 MB with authwatch (Phase 2, NF1: at most 384) | |
 | `glitchtip` and its database, if it passes ADR-004's gate | 256 MB | 5 |
 
 Every cap is a hard `mem_limit`. Idle and busy memory are measured on the
@@ -339,7 +356,23 @@ server once deployed and published next to these numbers.
 **Cut order if the server is short of memory** (decided now, not under
 pressure): GlitchTip first; then VictoriaMetrics, `vmalert` and
 node_exporter, replaced by Gatus alone (uptime and certificates only).
-**Never cut** `authwatch` or Alertmanager.
+**Never cut** the security detector or Alertmanager.
+
+### ADR-012: Frameworks and plain code
+
+**Decision:** the stack Arthur already uses, so this looks like the other
+projects:
+- **Python tooling:** uv, ruff, pyright (strict), pytest.
+- **`slo-check` (slice 5):** Typer for its command line, pydantic-settings
+  for its settings, SQLAlchemy 2 for the read-only queries, httpx and
+  tenacity to post to Alertmanager with retries.
+- **Everything else is configuration** of existing tools (Alertmanager,
+  Vector, later VictoriaMetrics and the exporters), tested by running
+  them.
+
+**Plain code, on purpose:** the Telegram stand-in in `e2e/` is a 50-line
+standard-library HTTP server used only by tests; a web framework would be
+heavier than the problem.
 
 ## Open, for Arthur
 
@@ -350,6 +383,6 @@ node_exporter, replaced by Gatus alone (uptime and certificates only).
 | 3 | Probes (ADR-003) | blackbox_exporter; Gatus only as the fallback |
 | 4 | Errors (ADR-004) | GlitchTip, only if it passes the 256 MB gate |
 | 5 | Metrics (ADR-005) | VictoriaMetrics, with the cgroup script instead of cAdvisor |
-| 6 | Security watcher (ADR-006, 007) | authwatch: detect only, failed logins as silent messages |
+| 6 | Security detection (ADR-006, 007) | Vector (new to the stack: needs your OK); detect only; failed logins as silent messages |
 | 7 | Juku's SLOs (ADR-008) | The drafts above, confirmed after two weeks live |
 | 8 | An external uptime check (needs an account) | Later, once Juku is live: the only way to hear that the whole server is down |
