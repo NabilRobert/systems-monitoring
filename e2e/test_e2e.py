@@ -1,4 +1,4 @@
-"""End to end in Docker: log line → authwatch → Alertmanager → Telegram stand-in.
+"""End to end in Docker: log line → detector → Alertmanager → Telegram stand-in.
 
 Runs the production compose file with e2e/compose.override.yaml on top, so
 the images, hardening, memory caps and routing tree are the real ones.
@@ -95,7 +95,7 @@ def stack() -> Iterator[Path]:
         )
     )
     write_atomic(OUT / "net" / "tcp", TCP_BASE)
-    # A line already in the log before authwatch starts: must never alert.
+    # A line already in the log before the detector starts: must never alert.
     (OUT / "log" / "auth.log").write_text(
         line("Accepted publickey for oldsession from 203.0.113.99 port 1 ssh2")
     )
@@ -186,10 +186,10 @@ def test_failed_login_flood_is_a_silent_ticket(stack: Path):
 def test_new_listening_port_pages_then_resolves(stack: Path):
     write_atomic(OUT / "net" / "tcp", TCP_NEW_PORT)
     written = time.time()
-    message = wait_for("New listening TCP port 0.0.0.0:8080")
+    message = wait_for("New listening TCP port 0.0.0.0:8080", timeout=120)
     check(message, written, silent=False)
     write_atomic(OUT / "net" / "tcp", TCP_BASE)
-    resolved = wait_for("✅ Resolved: <b>NewListeningPort</b>", timeout=150)
+    resolved = wait_for("✅ Resolved: <b>NewListeningPort</b>", timeout=240)
     assert "resolved: New listening TCP port 0.0.0.0:8080" in text_of(resolved)
 
 

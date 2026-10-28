@@ -33,20 +33,20 @@ services:
       telegram-stub:
         condition: service_healthy
 
-  authwatch:
-    network_mode: !reset null
+  vector:
+    # Shares Alertmanager's network namespace, so 127.0.0.1:9093 reaches it
+    # as on the server.
+    network_mode: !override "service:alertmanager"
     group_add: !reset []
     env_file: !reset []
     volumes: !override
+      - ./vector/vector.yaml:/etc/vector/vector.yaml:ro
       - ../e2e/out/log:/host/log:ro
       - ../e2e/out/net:/fake/net:ro
     environment:
-      AUTHWATCH_ALERTMANAGER_URL: http://alertmanager:9093
       AUTHWATCH_PROC_NET: /fake/net
       AUTHWATCH_HOST_LABEL: e2e-host
       AUTHWATCH_ALLOWED_PORTS: "22"
       AUTHWATCH_KNOWN_NETWORKS: 192.0.2.0/24
-      AUTHWATCH_PORT_INTERVAL_SECONDS: "5"
-      AUTHWATCH_POLL_INTERVAL_SECONDS: "0.5"
       AUTHWATCH_RUNBOOK_BASE: https://example.org/runbooks
       TZ: Asia/Jakarta
