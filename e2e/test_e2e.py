@@ -7,6 +7,7 @@ Addresses are documentation ranges (RFC 5737).
 """
 
 import json
+import shlex
 import shutil
 import subprocess
 import time
@@ -191,6 +192,20 @@ def test_new_listening_port_pages_then_resolves(stack: Path):
     write_atomic(OUT / "net" / "tcp", TCP_BASE)
     resolved = wait_for("✅ Resolved: <b>NewListeningPort</b>", timeout=240)
     assert "resolved: New listening TCP port 0.0.0.0:8080" in text_of(resolved)
+
+
+def test_hand_sent_delivery_test_arrives(stack: Path):
+    """The drill in docs/runbooks/test-alert.md, with the same amtool command."""
+    runbook = (ROOT / "docs" / "runbooks" / "test-alert.md").read_text()
+    command = next(row for row in runbook.splitlines() if row.startswith("docker compose exec"))
+    args = command.split(" exec ", 1)[1]
+    sent_at = time.time()
+    subprocess.run(
+        [*COMPOSE, "exec", "-T", *shlex.split(args.replace('"$(date +%s)"', "e2e-drill"))],
+        check=True,
+        cwd=ROOT,
+    )
+    check(wait_for("Test alert: delivery works"), sent_at, silent=False)
 
 
 def test_old_lines_and_allowed_ports_never_alert(stack: Path):

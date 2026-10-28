@@ -2,7 +2,7 @@
 
 **Means:** someone logged in to the server over SSH. The message gives the
 user, the method (`publickey`, `password`) and the source address.
-Silent (ticket) if the address is in `AUTHWATCH_KNOWN_NETWORKS`; otherwise
+Silent (ticket) if the address is in `SECURITY_KNOWN_NETWORKS`; otherwise
 it buzzes (page).
 
 ## Is it expected?

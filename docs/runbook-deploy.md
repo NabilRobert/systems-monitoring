@@ -3,11 +3,11 @@
 For Arthur, on the shared server. About an hour, most of it step 7.
 Nothing in this repo deploys itself; every step is run by hand.
 
-**What gets installed:** two containers, both capped at 48 MB, both
-read-only, with no capabilities and nothing reachable from outside:
-- `alertmanager`, on `127.0.0.1:9093` only;
-- `authwatch`, which reads `/var/log` read-only and the host's
-  `/proc/net/tcp`, and listens on nothing.
+**What gets installed:** two containers, both read-only, with no
+capabilities and nothing reachable from outside:
+- `alertmanager` (capped at 48 MB), on `127.0.0.1:9093` only;
+- `vector` (capped at 96 MB), which reads `/var/log` read-only and the host's
+  `/proc/net/tcp`, and listens only on loopback (its health check).
 
 **What it never does:** change the firewall, SSH, accounts or any other
 security setting. It only reads and reports.
@@ -73,9 +73,8 @@ ls -l /var/log/auth.log
 - **It exists** (Ubuntu and most Debian with rsyslog): note its group ID
   for step 4, `stat -c '%g' /var/log/auth.log` (usually `4`, `adm`).
 - **It doesn't** (journald only, as on a minimal Debian): stop here and
-  tell the session. authwatch can read `journalctl -f -o short-iso` from
-  standard input (`AUTHWATCH_LOG_FILE=-`), but that needs a small systemd
-  unit instead of this compose service, which isn't written yet.
+  tell the session. Vector can read the journal (its `journald` source),
+  but that configuration isn't written yet.
 
 Check the SSH program name the log uses (OpenSSH 9.8 and later write
 `sshd-session`); both are understood:
@@ -92,25 +91,29 @@ chmod 600 .env
 ```
 
 Edit `.env`:
-- `AUTHWATCH_HOST_LABEL`: a name for the server in messages, not its real
+- `SECURITY_HOST_LABEL`: a name for the server in messages, not its real
   hostname.
 - `AUTH_LOG_GID`: the number from step 3.
-- `TZ`: the server's timezone (`timedatectl | grep 'Time zone'`).
-- `AUTHWATCH_KNOWN_NETWORKS`: leave empty at first, so every login buzzes.
+- `SECURITY_KNOWN_NETWORKS`: leave empty at first, so every login buzzes.
   Fill it in later if your own logins get tiresome; they then arrive
   silently.
 
 Now see what's listening, to set the allow-list:
 
 ```bash
-docker compose build authwatch
-docker compose run --rm --no-deps authwatch list-ports
+sudo ss -ltnH | awk '{print $4}' | sort -u
 ```
 
-Every line marked `NOT ALLOWED` would alert. For each one, either add it
-to `AUTHWATCH_ALLOWED_PORTS` (only if it's meant to be public: usually
-`22,80,443`), or note it as something to bind to `127.0.0.1` later. Run
-`list-ports` again until it shows only what you expect.
+Every address here that isn't `127.0.0.1:…` or `[::1]:…` would alert.
+For each one, either add its port to `SECURITY_ALLOWED_PORTS` (only if
+it's meant to be public: usually `22,80,443`), or note it as something
+to bind to `127.0.0.1` later. Then check the rules with your settings:
+
+```bash
+docker compose run --rm --no-deps vector validate --skip-healthchecks /etc/vector/vector.yaml
+```
+
+Expect `Validated`.
 
 ## 5. Check the Alertmanager config
 
@@ -127,8 +130,9 @@ docker compose up -d
 docker compose ps
 ```
 
-Both should be `Up`, and `authwatch` `(healthy)` within a minute.
-`docker compose logs authwatch` should show `watching /host/log/auth.log`.
+Both should be `Up`, and `vector` `(healthy)` within a minute.
+`docker compose logs vector` should show `Found new file to watch`
+with `file=/host/log/auth.log`.
 
 ## 7. Fire each alert once, and record that it arrived
 
@@ -136,7 +140,7 @@ Note the time you do each, and the time the message arrives.
 
 | # | Do | Expect on the phone |
 |---|---|---|
-| 1 | `docker compose exec authwatch python -m authwatch test-alert` | 🔴 AuthwatchTest |
+| 1 | The `amtool alert add` command in [runbooks/test-alert.md](runbooks/test-alert.md) | 🔴 DeliveryTest |
 | 2 | Open a second SSH session from your laptop | 🔴 SSHLogin with your user, `publickey`, your address |
 | 3 | In it: `sudo true` | 🔴 SudoCommand `sudo: <you> ran as root: /usr/bin/true` |
 | 4 | `sudo -k` then `sudo true`, and type a wrong password three times | 🔴 SudoAuthFailure `3 incorrect password attempts` |
@@ -144,7 +148,7 @@ Note the time you do each, and the time the message arrives.
 | 6 | From your laptop (see step 0 about bans): `for i in $(seq 25); do ssh -o BatchMode=yes -o PreferredAuthentications=none -o ConnectTimeout=5 nosuchuser@<server> true; done` | 🟡 SSHFailedLoginBurst, silently |
 
 If one doesn't arrive, follow
-[runbooks/authwatch-test.md](runbooks/authwatch-test.md).
+[runbooks/test-alert.md](runbooks/test-alert.md).
 
 Then record the memory:
 
@@ -164,14 +168,15 @@ sudo grep -cE 'Invalid user|Failed|preauth' /var/log/auth.log
 ```
 
 If `SSHFailedLoginFlood` fired on an ordinary day, raise
-`AUTHWATCH_FLOOD_TOTAL` above the busiest normal 10 minutes, then
-`docker compose up -d authwatch`. The aim: a flood message means
+the flood threshold above the busiest normal 10 minutes: in
+`vector/vector.yaml`, both `max_events: 200` (`flood_groups`) and
+`threshold = 200` (`flood_alerts`), then `docker compose up -d vector`. The aim: a flood message means
 something unusual.
 
 ## Day to day
 
 - **Maintenance with lots of sudo:** silence it for the duration instead
-  of stopping authwatch:
+  of stopping Vector:
 
   ```bash
   docker compose exec alertmanager amtool silence add alertname=SudoCommand --duration=1h --comment=maintenance --alertmanager.url=http://127.0.0.1:9093

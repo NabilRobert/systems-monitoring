@@ -4,7 +4,8 @@ version = "0.1.0"
 description = "Monitoring for small live apps on one shared server: security alerts, SLOs, uptime"
 requires-python = ">=3.14"
 license = "MIT"
-# authwatch uses the standard library only; these are for development.
+# No runtime code: the detection is Vector configuration. These are the
+# test and lint tools.
 dependencies = []
 
 [dependency-groups]

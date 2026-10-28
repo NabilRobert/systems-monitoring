@@ -1,7 +1,7 @@
 # NewListeningPort
 
 **Means:** a TCP port is listening on a non-loopback address and isn't in
-`AUTHWATCH_ALLOWED_PORTS`. It stays firing while the port listens, and a
+`SECURITY_ALLOWED_PORTS`. It stays firing while the port listens, and a
 "Resolved" message follows when it closes.
 
 ## Is it expected?
@@ -26,8 +26,8 @@ classic sign of a backdoor.
 ## What to do
 
 - **Expected, and it should be public:** add it to
-  `AUTHWATCH_ALLOWED_PORTS` in `deploy/.env` and run `docker compose up -d
-  authwatch`. The alert resolves within about two minutes.
+  `SECURITY_ALLOWED_PORTS` in `deploy/.env` and run `docker compose up -d
+  vector`. The alert resolves within about two minutes.
 - **Expected, but it shouldn't be public:** bind it to `127.0.0.1`
   (compose: `"127.0.0.1:<port>:<port>"`) and restart that service.
 - **Not expected** *(changes the server)*: stop the process, keep a copy

@@ -10,7 +10,7 @@ One per alert. Each alert's message links its runbook. A test
 | `SudoAuthFailure` | page | [sudo-auth-failure.md](sudo-auth-failure.md) |
 | `SSHFailedLoginBurst`, `SSHFailedLoginFlood` | ticket | [ssh-failed-logins.md](ssh-failed-logins.md) |
 | `NewListeningPort` | page | [new-listening-port.md](new-listening-port.md) |
-| `AuthwatchTest` | page | [authwatch-test.md](authwatch-test.md) |
+| `DeliveryTest` (sent by hand) | page | [test-alert.md](test-alert.md) |
 
 **Page** buzzes the phone; **ticket** arrives silently. Every runbook
 follows the same order: what it means, is it expected, what to check,
