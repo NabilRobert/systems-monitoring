@@ -9,7 +9,7 @@ tested. Every slice costs $0.
 | Slice | What it proves, end to end | Needs Juku live? | Est. |
 |---|---|---|---|
 | **0. Planning** | Phases 1, 2 and 5 and this plan | No | 0.5 day |
-| **1. Security alerts** | The detector (Vector, or the custom `authwatch`; ADR-006) reads synthetic auth-log lines and a fake socket table in Docker; Alertmanager routes them; the Telegram receiver delivers them to a local stand-in. Every rule has a unit test and an end-to-end test, each mutation-checked. A runbook per alert, and a deploy runbook for Arthur | No | 1 day |
+| **1. Security alerts** | Vector (ADR-006) reads synthetic auth-log lines and a fake socket table in Docker; Alertmanager routes them; the Telegram receiver delivers them to a local stand-in. Every rule has a unit test and an end-to-end test, each mutation-checked. A runbook per alert, and a deploy runbook for Arthur | No | 1 day |
 | **2. Deploy slice 1** (Arthur) | On the server, from `docs/runbook-deploy.md`: each alert fired once by hand and received; the failed-login thresholds calibrated on a week of real traffic; idle memory recorded | No | Arthur, 1 h |
 | **3. Metrics and probes** | VictoriaMetrics, `vmalert`, `blackbox_exporter`, node_exporter and the cgroup script. Alerts: an app down, a certificate under 14 days, disk over 85%, a container over 90% of its cap, an out-of-memory kill, the security detector silent. Availability SLOs for MCP-backbone and the Pitstop demo. The memory gate (ADR-005) measured before anything else | No | 1 day |
 | **4. Errors** | The GlitchTip spike against its gate (ADR-004). If it passes: its compose file and a test event from a sample app. If it fails: the result is published and the fallback recorded | No | 0.5 day |

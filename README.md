@@ -20,7 +20,7 @@ is ready. The rest is planned in the [slice plan](docs/planning/slice-plan.md).
 
 ```
  auth log ─┐
-           ├─► authwatch ─► Alertmanager ─► Telegram bot ─► one person's phone
+           ├─► Vector ────► Alertmanager ─► Telegram bot ─► one person's phone
  /proc/net ┘   (detects)    (groups, routes,
                              silences)
 ```
@@ -41,51 +41,56 @@ login always buzzes. Each alert links its [runbook](docs/runbooks/).
 **It only detects.** Nothing here changes a firewall, SSH setting or
 account (Phase 5, ADR-006).
 
-`authwatch` is about 750 lines of standard-library Python, comments included:
-- follows the auth log through rotation and truncation, starting at the
-  end so old lines never alert; reads both syslog timestamp formats, and
-  both `sshd` and OpenSSH 9.8's `sshd-session`;
-- counts each failed *connection* once, however many lines it logs;
-- reads listening sockets from `/proc/net/tcp{,6}` (no tools, no
-  privileges);
-- queues alerts if Alertmanager is down (bounded, with backoff).
+**Nothing is hand-written that a tool already does.** The detection is
+[Vector](https://vector.dev) configuration
+([`deploy/vector/vector.yaml`](deploy/vector/vector.yaml)): it follows
+the auth log through rotation, starts at the end so old lines never
+alert, reads both syslog timestamp formats and OpenSSH 9.8's
+`sshd-session`, counts each failed *connection* once, reads listening
+sockets from `/proc/net/tcp{,6}`, and buffers alerts while Alertmanager
+is down. A custom Python watcher was built first; it was replaced after
+Vector passed the same end-to-end tests (ADR-006 has the comparison).
 
 ## Tested
 
 | Check | What it proves |
 |---|---|
-| 65 unit tests | Parsing real sshd and sudo line shapes, every rule and threshold, socket-table decoding, rotation, the queue and retries |
-| 22 mutations of the code | Each one (an off-by-one threshold, a missed log format, a dropped dedup, a lost rotation…) makes a test fail |
+| 28 rule tests (`vector test`) | Each rule on real sshd, sudo and `/proc/net/tcp` line shapes: what alerts, at what severity, with what text, and what stays quiet |
+| 15 mutations of the rules | Each one (an off-by-one threshold, a missed log format, a wrong byte order, an ignored allow-list…) makes a rule test fail |
 | 7 routing tests | `amtool` from the pinned image: the config is valid, and each kind of alert reaches the right receiver |
-| 8 end-to-end tests, in Docker | The **production** compose file (images, hardening, caps, routing) with a stand-in for Telegram's API: each alert from a synthetic log line or socket table to a delivered message, silent or not as designed, HTML-escaped, within 60 s; old lines and allowed ports never alert |
+| 9 end-to-end tests, in Docker | The **production** compose file (images, hardening, caps, routing) with a stand-in for Telegram's API: each alert from a synthetic log line or socket table to a delivered message, silent or not as designed, HTML-escaped, within 60 s; the hand-sent delivery drill; old lines and allowed ports never alert |
+| 3 runbook tests | Every alert in the rules has a runbook that exists and is indexed |
 
 Measured locally (Docker Desktop, arm64), during the end-to-end run:
 
 | Container | Peak memory | Cap |
 |---|---|---|
-| `authwatch` | 18.6 MiB | 48 MB |
-| `alertmanager` | 13.9 MiB | 48 MB |
+| `vector` | 73.1 MiB | 96 MB |
+| `alertmanager` | 19.8 MiB | 48 MB |
 
-Every alert arrived 15–20 s after its log line: Alertmanager's 15 s
-grouping wait plus polling. On the server these get measured again
-([runbook](docs/runbook-deploy.md), step 7).
+Every alert arrived 15–23 s after its log line: Alertmanager's 15 s
+grouping wait plus Vector's batching. On the server these get measured
+again ([runbook](docs/runbook-deploy.md), step 7).
 
 ## Run it
 
 ```bash
 uv sync
-uv run ruff check . && uv run pyright && uv run pytest   # unit tests
-uv run pytest -m e2e e2e/                                # Docker, about 4 minutes
+uv run ruff check . && uv run pyright && uv run pytest   # quick checks
+uv run pytest -m e2e e2e/                                # Docker, about 5 minutes
 ```
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `authwatch/` | The log and socket watcher |
-| `deploy/` | Compose file, Alertmanager config and message template, `.env.example` |
+| `deploy/vector/` | The six detection rules, and their unit tests |
+| `deploy/alertmanager/` | Routing, receivers and the Telegram message template |
+| `deploy/compose.yaml`, `deploy/.env.example` | The stack and its settings |
 | `e2e/` | The Docker tests and the Telegram stand-in |
-| `docs/planning/` | Problem, requirements, decisions (with rejected alternatives), Juku's draft SLOs, slice plan |
+| `tests/` | Quick checks that need no Docker (runbook coverage) |
+| `docs/guide.md` | How it works, step by step, with a glossary: start here |
+| `docs/planning/` | Problem, requirements, decisions (with the options considered), Juku's draft SLOs, slice plan |
 | `docs/runbooks/` | One runbook per alert |
 | `docs/runbook-deploy.md` | Deploying slice 1, step by step |
 

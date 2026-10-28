@@ -150,7 +150,7 @@ collector.
   host memory, disk, other apps or probes.
 - *A hosted metrics service:* an account, and data leaving the server.
 
-### ADR-006: Security detection with Vector, not custom code (open: needs Arthur's OK)
+### ADR-006: Security detection with Vector, not custom code (settled)
 
 **The rules** (the same whichever tool runs them):
 
@@ -175,7 +175,7 @@ every public server is scanned all day; a *successful* login and every
 | Option | Licence, upkeep | Covers | Memory | Verdict |
 |---|---|---|---|---|
 | Arthur's own repos | — | Nothing: no log detection or alert delivery anywhere (grep across the folder) | — | Nothing to reuse |
-| **Vector** 0.59 (log pipeline) | MPL-2.0; Datadog, monthly releases | **All six rules:** file tailing with rotation, regex parsing, per-connection dedupe, windows (`reduce` + `throttle`), an `exec` source for the socket table, an HTTP sink with a bounded retry buffer | **66 MiB idle**, measured | **Recommended** |
+| **Vector** 0.59 (log pipeline) | MPL-2.0; Datadog, monthly releases | **All six rules:** file tailing with rotation, regex parsing, per-connection dedupe, windows (`reduce` + `throttle`), an `exec` source for the socket table, an HTTP sink with a bounded retry buffer | **66 MiB idle**, measured | **Chosen** |
 | Fluent Bit | Apache-2.0, CNCF | Tailing, parsing, HTTP out; but counting in a window needs a Lua script, which is custom code again | ~10 MiB (commonly reported) | Close second |
 | fail2ban, notify-only | GPL-2.0, active | Failed-login bursts only (a true sliding window). Logins and `sudo` would mean abusing a ban engine with `maxretry=1`; actions are shell commands | ~40–60 MiB | Partial; and it is built to block |
 | CrowdSec engine, no bouncer | MIT, active | Community brute-force scenarios and an HTTP notifier; no scenarios for successful logins or `sudo`. Shares signals with its central API unless turned off | ~60–120 MiB | Partial; privacy setting to manage |
@@ -184,7 +184,7 @@ every public server is scanned all day; a *successful* login and every
 | grok_exporter | Unmaintained since 2021 | — | — | No |
 | Wazuh, OSSEC | GPL | A full SIEM | Wazuh well over 1 GB | No |
 | A PAM or `sshrc` hook | — | Logins only | — | Changes the server's authentication settings: no |
-| Custom (`authwatch`, built first) | Ours | All six, exact sliding windows | **19 MiB** peak, measured | Only if Vector is refused |
+| Custom (`authwatch`, built first) | Ours | All six, exact sliding windows | **19 MiB** peak, measured | Replaced by Vector |
 
 **The spike** (branch `spike/vector-detectors`): the same six rules as
 Vector configuration, run against **the same 8 end-to-end tests** as the
@@ -197,16 +197,17 @@ arrived in 16–27 s.
 | Memory (measured) | 66 MiB idle, cap 96 MB | 19 MiB peak, cap 48 MB |
 | Burst and flood windows | Close to a sliding window (a group that starts slowly is dropped and the count restarts) | Exact sliding window |
 | Settings | Names and lists from the environment; thresholds are numbers in the config file (Vector no longer expands `${…}` in its config unless a flag named `--dangerously-allow-env-var-interpolation` is set) | All from the environment |
-| Unit tests | `vector test` cases in the config (to write) | pytest |
+| Unit tests | 28 `vector test` cases | 65 pytest tests |
 
-**Recommendation: Vector.** It does the whole job, it is a standard tool
+**Decision: Vector** (settled with Arthur, 2026-10-28). It does the whole job, it is a standard tool
 an operations team will recognise, and it removes a hand-written parser,
 follower, queue and retry loop. The costs are 47 MB more memory (the
 always-on total becomes 384 MB, exactly the Phase 2 budget) and
 approximate windows on two `ticket` alerts that are calibrated by hand
-anyway. **If Arthur declines** (it is new to his stack), authwatch stays,
-reworked to his framework stack (Typer, pydantic-settings, httpx,
-tenacity) as the "Frameworks over plain code" rule asks.
+anyway. authwatch was removed; it remains in the history of the
+`feat/security-alerts` branch. The rules have their own unit tests
+(`deploy/vector/tests/rules.yaml`, run with `vector test`), each
+mutation-checked.
 
 **Traps found in the spike, for the record:** VRL scopes variables to
 their block; it evaluates `a || b && c` left to right; the HTTP sink's
@@ -341,13 +342,13 @@ where it stops.
 | Container | Cap | Slice |
 |---|---|---|
 | `alertmanager` | 48 MB | 1 |
-| Detector: Vector (`authwatch`: 48 MB) | 96 MB | 1 |
+| `vector` (security detection) | 96 MB | 1 |
 | `blackbox` | 32 MB | 3 |
 | `victoriametrics` | 128 MB | 4 |
 | `vmalert` | 32 MB | 4 |
 | `node-exporter` (with the cgroup textfile script) | 48 MB | 4 |
 | `slo-check` (runs every 5 min, exits) | 48 MB | 6 |
-| **Always-on total** | **384 MB** with Vector, 336 MB with authwatch (Phase 2, NF1: at most 384) | |
+| **Always-on total** | **384 MB** (Phase 2, NF1: at most 384) | |
 | `glitchtip` and its database, if it passes ADR-004's gate | 256 MB | 5 |
 
 Every cap is a hard `mem_limit`. Idle and busy memory are measured on the
@@ -383,6 +384,6 @@ heavier than the problem.
 | 3 | Probes (ADR-003) | blackbox_exporter; Gatus only as the fallback |
 | 4 | Errors (ADR-004) | GlitchTip, only if it passes the 256 MB gate |
 | 5 | Metrics (ADR-005) | VictoriaMetrics, with the cgroup script instead of cAdvisor |
-| 6 | Security detection (ADR-006, 007) | Vector (new to the stack: needs your OK); detect only; failed logins as silent messages |
+| 6 | Security detection (ADR-006, 007) | **Settled:** Vector; detect only; failed logins as silent messages |
 | 7 | Juku's SLOs (ADR-008) | The drafts above, confirmed after two weeks live |
 | 8 | An external uptime check (needs an account) | Later, once Juku is live: the only way to hear that the whole server is down |
