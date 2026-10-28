@@ -1,0 +1,64 @@
+# The always-on monitoring stack, slice 1: security alerts.
+# Run from this directory: `docker compose up -d` (docs/runbook-deploy.md).
+# Nothing here is reachable from outside the server.
+name: systems-monitoring
+
+services:
+  alertmanager:
+    image: prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --data.retention=120h
+      # A single instance: no cluster port.
+      - --cluster.listen-address=
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./alertmanager/templates:/etc/alertmanager/templates:ro
+      - ./secrets:/etc/alertmanager/secrets:ro
+      - alertmanager-data:/alertmanager
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 48m
+    pids_limit: 64
+    restart: unless-stopped
+
+  authwatch:
+    build:
+      context: ..
+      dockerfile: deploy/authwatch/Dockerfile
+    image: systems-monitoring/authwatch:local
+    # The host's network namespace, so /proc/net/tcp lists the host's
+    # listening sockets. authwatch itself listens on nothing.
+    network_mode: host
+    # Read the auth log through its directory, so a rotated file (a new
+    # inode) is seen. The group is the one that owns the log (adm, 4, on
+    # Debian and Ubuntu; check with `stat -c %g /var/log/auth.log`).
+    group_add: ["${AUTH_LOG_GID:-4}"]
+    volumes:
+      - /var/log:/host/log:ro
+    env_file: .env
+    environment:
+      AUTHWATCH_ALERTMANAGER_URL: http://127.0.0.1:9093
+      AUTHWATCH_LOG_FILE: /host/log/auth.log
+      AUTHWATCH_PROC_NET: /proc/net
+      AUTHWATCH_ALIVE_FILE: /tmp/alive
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,sys,time; sys.exit(time.time() - os.stat('/tmp/alive').st_mtime > 30)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    read_only: true
+    tmpfs: [/tmp:size=1m]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 48m
+    pids_limit: 32
+    depends_on: [alertmanager]
+    restart: unless-stopped
+
+volumes:
+  alertmanager-data:
