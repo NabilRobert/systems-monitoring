@@ -32,7 +32,7 @@ While it fires, the same app's SLO burn alerts are held back
 ## Afterwards
 
 If the outage spent more than 20% of the month's availability budget
-(ADR-008), write a postmortem: what users saw, how it was found, the
+([ADR-008](../adr/0008-juku-slos-and-error-budgets.md)), write a postmortem: what users saw, how it was found, the
 cause, the fix, and what changes so it doesn't recur.
 
 ## Over when

@@ -9,10 +9,10 @@ tested. Every slice costs $0.
 | Slice | What it proves, end to end | Needs Juku live? | Est. |
 |---|---|---|---|
 | **0. Planning** | Phases 1, 2 and 5 and this plan | No | 0.5 day |
-| **1. Security alerts** | Vector (ADR-006) reads synthetic auth-log lines and a fake socket table in Docker; Alertmanager routes them; the Telegram receiver delivers them to a local stand-in. Every rule has a unit test and an end-to-end test, each mutation-checked. A runbook per alert, and a deploy runbook for Arthur | No | 1 day |
+| **1. Security alerts** | Vector ([ADR-006](../adr/0006-security-detection-with-vector.md)) reads synthetic auth-log lines and a fake socket table in Docker; Alertmanager routes them; the Telegram receiver delivers them to a local stand-in. Every rule has a unit test and an end-to-end test, each mutation-checked. A runbook per alert, and a deploy runbook for Arthur | No | 1 day |
 | **2. Deploy slice 1** (Arthur) | On the server, from `docs/runbook-deploy.md`: each alert fired once by hand and received; the failed-login thresholds calibrated on a week of real traffic; idle memory recorded | No | Arthur, 1 h |
-| **3. Metrics and probes** | VictoriaMetrics, `vmalert`, `blackbox_exporter`, and host and container metrics from Vector (ADR-005: this replaced node_exporter and a cgroup script). Alerts: an app down, the prober down, a certificate under 14 and 3 days, disk over 85% and 95%, host memory low, an out-of-memory kill, Vector silent. Availability SLOs with burn-rate alerts for MCP-backbone and the Pitstop demo. The memory gate (ADR-005) measured before anything else | No | 1 day |
-| **4. Errors** | The GlitchTip spike against its gate (ADR-004). If it passes: its compose file and a test event from a sample app. If it fails: the result is published and the fallback recorded | No | 0.5 day |
+| **3. Metrics and probes** | VictoriaMetrics, `vmalert`, `blackbox_exporter`, and host and container metrics from Vector ([ADR-005](../adr/0005-victoriametrics-host-metrics-from-vector.md): this replaced node_exporter and a cgroup script). Alerts: an app down, the prober down, a certificate under 14 and 3 days, disk over 85% and 95%, host memory low, an out-of-memory kill, Vector silent. Availability SLOs with burn-rate alerts for MCP-backbone and the Pitstop demo. The memory gate ([ADR-005](../adr/0005-victoriametrics-host-metrics-from-vector.md)) measured before anything else | No | 1 day |
+| **4. Errors** | The GlitchTip spike against its gate ([ADR-004](../adr/0004-glitchtip-behind-memory-gate.md)). If it passes: its compose file and a test event from a sample app. If it fails: the result is published and the fallback recorded | No | 0.5 day |
 | **— Checkpoint —** | The server is watched before Juku's first user: security, uptime, host health. Report to Arthur | | |
 | **5. Juku's SLOs** | `slo-check` with the committed SLI SQL; burn-rate tests on fixture rows (each window, the 10-event floor); Juku's Grafana pointed at Alertmanager. After two weeks: the drafts confirmed or changed, with reasons | **Yes** | 1 day |
 | **6. AI-specific signals** | Spend *rate* against the cap (will the pool run out before the window ends?), chat refusal and failure rates, gateway blocks, the facts-only fallback rate; the weekly quality sample through the harness's deterministic checks. Juku's own alerts (budget thresholds, heartbeat, audit chain) stay Juku's and are not duplicated | **Yes** | 1 day |
@@ -31,7 +31,7 @@ runbook covers slices 2 and 3. Nothing is deployed.
   end-to-end test that the message reaches the channel stand-in. A rule
   without both doesn't merge.
 - **Every alert has a runbook,** linked from the alert.
-- **Memory gates** (ADR-004, ADR-005) are measured before the component is
+- **Memory gates** ([ADR-004](../adr/0004-glitchtip-behind-memory-gate.md), [ADR-005](../adr/0005-victoriametrics-host-metrics-from-vector.md)) are measured before the component is
   adopted, and the numbers are published either way.
 - **SLO targets are drafts until two weeks of traffic;** after that, a
   change needs a written reason, and the first window's result is
@@ -48,10 +48,10 @@ scripted. Quality checks are deterministic. Telegram's bot API is free.
 ## Fallback decision (made in advance)
 
 If time or memory runs short, cut in this order:
-1. Slice 4, GlitchTip (fallback: error counts and traces, ADR-004).
+1. Slice 4, GlitchTip (fallback: error counts and traces, [ADR-004](../adr/0004-glitchtip-behind-memory-gate.md)).
 2. Slice 6's quality sample (keep the rate signals).
 3. Slice 3's metrics store, replaced by Gatus alone (uptime and
-   certificates only; ADR-011).
+   certificates only; [ADR-011](../adr/0011-memory-budget.md)).
 
 **Never cut:**
 - security alerts (slice 1);

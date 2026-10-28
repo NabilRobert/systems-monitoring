@@ -40,7 +40,7 @@ succeed, and every public server is scanned all day. A *successful*
 login always buzzes. Each alert links its [runbook](docs/runbooks/).
 
 **It only detects.** Nothing here changes a firewall, SSH setting or
-account (Phase 5, ADR-006).
+account ([ADR-006](docs/adr/0006-security-detection-with-vector.md)).
 
 **Nothing is hand-written that a tool already does.** The detection is
 [Vector](https://vector.dev) configuration
@@ -50,7 +50,7 @@ alert, reads both syslog timestamp formats and OpenSSH 9.8's
 `sshd-session`, counts each failed *connection* once, reads listening
 sockets from `/proc/net/tcp{,6}`, and buffers alerts while Alertmanager
 is down. A custom Python watcher was built first; it was replaced after
-Vector passed the same end-to-end tests (ADR-006 has the comparison).
+Vector passed the same end-to-end tests ([ADR-006](docs/adr/0006-security-detection-with-vector.md) has the comparison).
 
 ## Slice 3: uptime, host health and availability SLOs
 
@@ -111,6 +111,16 @@ outage. On the server these get measured again
 VictoriaMetrics' memory gate, separately: with 30 days of data stored,
 15.9 MiB idle and 61.6 MiB peak on 30-day queries.
 
+## Docs
+
+| Start here | What |
+|---|---|
+| [docs/guide.md](docs/guide.md) | How it works, step by step, with diagrams, a glossary and where to change things |
+| [docs/adr/](docs/adr/README.md) | The decisions, one per file, each with the options considered |
+| [docs/planning/](docs/planning/README.md) | The specs and plans: problem, requirements, slice plan, spike results |
+| [docs/runbooks/](docs/runbooks/README.md) | One runbook per alert |
+| [docs/runbook-deploy.md](docs/runbook-deploy.md) | Deploying it on the server, step by step |
+
 ## Run it
 
 ```bash
@@ -131,7 +141,8 @@ uv run pytest -m e2e e2e/                                # Docker, about 12 minu
 | `e2e/` | The Docker tests and the Telegram stand-in |
 | `tests/` | Quick checks that need no Docker (runbook coverage) |
 | `docs/guide.md` | How it works, step by step, with a glossary: start here |
-| `docs/planning/` | Problem, requirements, decisions (with the options considered), Juku's draft SLOs, slice plan |
+| `docs/adr/` | The decisions, one per file, with the options considered; Juku's draft SLOs (ADR-008) |
+| `docs/planning/` | Problem, requirements, slice plan, spike results |
 | `docs/runbooks/` | One runbook per alert |
 | `docs/runbook-deploy.md` | Deploying slice 1, step by step |
 

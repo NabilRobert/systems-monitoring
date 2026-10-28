@@ -20,7 +20,7 @@
 
 - A container at its cap after a change: the change is the suspect.
   Roll back, or raise the cap *only* if the new size is measured and
-  still fits the server (the caps add up; Phase 5, ADR-011).
+  still fits the server (the caps add up; [ADR-011](../adr/0011-memory-budget.md)).
 - The whole server short: stop what isn't needed, and look at what grew.
 
 ## Over when

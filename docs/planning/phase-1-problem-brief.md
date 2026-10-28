@@ -69,7 +69,7 @@ working right now, and who gets told when it isn't".
 4. **The whole monitoring stack fits its memory budget** (Phase 2, NF1).
    Each container has a hard cap, and its idle and busy memory are
    measured and published.
-5. **Juku has SLOs with error budgets** (drafted in Phase 5, ADR-008):
+5. **Juku has SLOs with error budgets** (drafted in [ADR-008](../adr/0008-juku-slos-and-error-budgets.md)):
    computed from Juku's own records by committed SQL, with burn-rate
    alerts, and a monthly budget report. The targets are drafts until
    Juku has two weeks of real traffic.
