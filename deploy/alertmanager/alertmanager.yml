@@ -1,0 +1,64 @@
+# Alertmanager: the only delivery path (Phase 5, ADR-001).
+#
+# Two kinds of alert, told apart by the `event_id` label:
+# - events (an SSH login, a sudo command) are one-shot: they end by
+#   themselves after 5 minutes, and "resolved" is never sent for them;
+# - states (a port listening, later an app down) stay firing while true,
+#   and their resolution is sent.
+# Two severities: `page` buzzes the phone; `ticket` arrives silently.
+#
+# The bot token and chat ID are read from files in secrets/, which are
+# never committed (docs/runbook-deploy.md).
+
+global:
+  resolve_timeout: 5m
+
+templates:
+  - /etc/alertmanager/templates/*.tmpl
+
+route:
+  receiver: telegram-page
+  group_by: [alertname, host]
+  group_wait: 15s
+  group_interval: 1m
+  repeat_interval: 4h
+  routes:
+    # Events: one group per alert name and user. The group interval equals
+    # the events' 5-minute lifetime, so a message never repeats events
+    # already sent in the previous one.
+    - matchers: ['event_id=~".+"', 'severity="ticket"']
+      receiver: telegram-ticket-event
+      group_by: [alertname, host, user]
+      group_interval: 5m
+    - matchers: ['event_id=~".+"']
+      receiver: telegram-page-event
+      group_by: [alertname, host, user]
+      group_interval: 5m
+    - matchers: ['severity="ticket"']
+      receiver: telegram-ticket
+      repeat_interval: 24h
+
+receivers:
+  - name: telegram-page
+    telegram_configs:
+      - &telegram
+        api_url: https://api.telegram.org
+        bot_token_file: /etc/alertmanager/secrets/telegram_bot_token
+        chat_id_file: /etc/alertmanager/secrets/telegram_chat_id
+        parse_mode: HTML
+        message: '{{ template "telegram.sm.message" . }}'
+        send_resolved: true
+        disable_notifications: false
+  - name: telegram-ticket
+    telegram_configs:
+      - <<: *telegram
+        disable_notifications: true
+  - name: telegram-page-event
+    telegram_configs:
+      - <<: *telegram
+        send_resolved: false
+  - name: telegram-ticket-event
+    telegram_configs:
+      - <<: *telegram
+        send_resolved: false
+        disable_notifications: true

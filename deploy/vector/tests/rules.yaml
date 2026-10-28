@@ -1,0 +1,405 @@
+# Unit tests for the rules in ../vector.yaml, run with `vector test`
+# (e2e/test_vector_rules.py runs them in the pinned image, with
+# SECURITY_HOST_LABEL=test-host, SECURITY_ALLOWED_PORTS=22,
+# SECURITY_KNOWN_NETWORKS=192.0.2.0/24 and
+# SECURITY_RUNBOOK_BASE=https://example.org/runbooks).
+#
+# Each test feeds one stage and checks what comes out. Vector's own
+# building blocks (dedupe, reduce, throttle, the HTTP sink) are tested by
+# Vector; how they are wired together is tested end to end in e2e/.
+# Addresses are documentation ranges (RFC 5737, RFC 3849). VRL has no
+# `repeat`, so a list of N items is made by splitting N random bytes'
+# hex form into pairs.
+
+tests:
+  # ── Parsing auth-log lines ──────────────────────────────────────────
+  - name: an accepted ssh key in rfc 3339 format is a login
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:01.123456+07:00 web-1 sshd[812]: Accepted publickey for deploy from 203.0.113.7 port 51522 ssh2: ED25519 SHA256:abc"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "login")
+              assert_eq!(.user, "deploy")
+              assert_eq!(.method, "publickey")
+              assert_eq!(.addr, "203.0.113.7")
+
+  - name: a classic syslog line is parsed too
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "Oct 28 09:15:00 web-1 sshd[9]: Accepted password for arthur from 2001:db8::5 port 2222 ssh2"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "login")
+              assert_eq!(.method, "password")
+              assert_eq!(.addr, "2001:db8::5")
+
+  - name: openssh 9.8 logs logins from sshd-session
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:01+07:00 web-1 sshd-session[90]: Accepted publickey for deploy from 203.0.113.7 port 51522 ssh2"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: assert_eq!(.kind, "login")
+
+  - name: a failed password for a real user is a failure with its connection
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sshd[7]: Failed password for root from 198.51.100.9 port 4001 ssh2"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "ssh_failure")
+              assert_eq!(.addr, "198.51.100.9")
+              assert_eq!(.port, "4001")
+
+  - name: an invalid user is a failure
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sshd[7]: Invalid user admin from 198.51.100.9 port 4002"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "ssh_failure")
+              assert_eq!(.port, "4002")
+
+  - name: a refused key with key-only ssh is a failure
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sshd[7]: Connection closed by authenticating user root 198.51.100.9 port 4004 [preauth]"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "ssh_failure")
+              assert_eq!(.port, "4004")
+
+  - name: a preauth disconnect from an invalid user is a failure
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sshd[7]: Disconnected from invalid user oracle 198.51.100.9 port 4005 [preauth]"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "ssh_failure")
+              assert_eq!(.port, "4005")
+
+  - name: a failed password for an invalid user is left to its invalid-user line
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sshd[7]: Failed password for invalid user admin from 198.51.100.9 port 4002 ssh2"
+    no_outputs_from: [parse]
+
+  - name: a sudo command is parsed with who ran what
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sudo:   arthur : TTY=pts/0 ; PWD=/home/arthur ; USER=root ; COMMAND=/usr/bin/systemctl restart caddy"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "sudo")
+              assert_eq!(.user, "arthur")
+              assert_eq!(.run_as, "root")
+              assert_eq!(.command, "/usr/bin/systemctl restart caddy")
+
+  - name: a sudo refusal keeps its reason
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sudo[4411]:     mallory : 3 incorrect password attempts ; TTY=pts/2 ; PWD=/tmp ; USER=root ; COMMAND=/bin/bash"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "sudo_refused")
+              assert_eq!(.reason, "3 incorrect password attempts")
+
+  - name: session messages and other programs are ignored
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sudo: pam_unix(sudo:session): session opened for user root(uid=0) by arthur(uid=1000)"
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 CRON[5]: Accepted publickey for x from 192.0.2.1 port 1"
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "not a log line at all"
+    no_outputs_from: [parse]
+
+  # ── Login and sudo alerts ───────────────────────────────────────────
+  - name: a login from an unknown address pages
+    inputs:
+      - insert_at: event_alerts
+        type: log
+        log_fields: {kind: login, user: deploy, method: publickey, addr: 203.0.113.7}
+    outputs:
+      - extract_from: event_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.alertname, "SSHLogin")
+              assert_eq!(.labels.severity, "page")
+              assert_eq!(.labels.known_source, "false")
+              assert_eq!(.labels.host, "test-host")
+              assert!(is_string(.labels.event_id))
+              assert_eq!(.annotations.summary, "SSH login: deploy (publickey) from 203.0.113.7, an unknown address")
+              assert_eq!(.annotations.runbook_url, "https://example.org/runbooks/ssh-login.md")
+
+  - name: a login from a known network is a silent ticket
+    inputs:
+      - insert_at: event_alerts
+        type: log
+        log_fields: {kind: login, user: arthur, method: publickey, addr: 192.0.2.44}
+    outputs:
+      - extract_from: event_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.severity, "ticket")
+              assert_eq!(.labels.known_source, "true")
+
+  - name: a sudo command pages with the command
+    inputs:
+      - insert_at: event_alerts
+        type: log
+        log_fields: {kind: sudo, user: arthur, run_as: root, command: /usr/bin/id}
+    outputs:
+      - extract_from: event_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.alertname, "SudoCommand")
+              assert_eq!(.labels.severity, "page")
+              assert_eq!(.annotations.summary, "sudo: arthur ran as root: /usr/bin/id")
+
+  - name: a long sudo command is cut to 200 characters
+    inputs:
+      - insert_at: event_alerts
+        type: vrl
+        source: |
+          . = {"kind": "sudo", "user": "a", "run_as": "root", "command": encode_base16(random_bytes!(150))}
+    outputs:
+      - extract_from: event_alerts
+        conditions:
+          - type: vrl
+            source: |
+              command = split(string!(.annotations.summary), ": ", 3)[2]
+              assert_eq!(strlen(string!(command)), 200)
+              assert!(ends_with(string!(command), "…"))
+
+  - name: a refused sudo pages with the reason
+    inputs:
+      - insert_at: event_alerts
+        type: log
+        log_fields: {kind: sudo_refused, user: mallory, run_as: root, command: /bin/bash, reason: "3 incorrect password attempts"}
+    outputs:
+      - extract_from: event_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.alertname, "SudoAuthFailure")
+              assert_eq!(.labels.severity, "page")
+              assert_eq!(.annotations.summary, "sudo refused for mallory (3 incorrect password attempts): /bin/bash")
+
+  - name: every event ends five minutes from now so it never resolves noisily
+    inputs:
+      - insert_at: event_alerts
+        type: log
+        log_fields: {kind: sudo, user: a, run_as: root, command: /bin/true}
+    outputs:
+      - extract_from: event_alerts
+        conditions:
+          - type: vrl
+            source: |
+              left = to_unix_timestamp(parse_timestamp!(.endsAt, "%+")) - to_unix_timestamp(now())
+              assert!(left >= 298 && left <= 300)
+
+  # ── Failed-login bursts and floods (on groups made by `reduce`) ────
+  - name: twenty failures from one address within a minute is a burst ticket
+    inputs:
+      - insert_at: burst_alerts
+        type: vrl
+        source: |
+          start = parse_timestamp!("2026-10-28T03:00:00Z", "%+")
+          end = parse_timestamp!("2026-10-28T03:00:45Z", "%+")
+          times = map_values(chunks!(encode_base16(random_bytes!(19)), 2)) -> |_v| { start }
+          . = {"addr": "198.51.100.9", "timestamp": push(times, end)}
+    outputs:
+      - extract_from: burst_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.alertname, "SSHFailedLoginBurst")
+              assert_eq!(.labels.severity, "ticket")
+              assert_eq!(.labels.source, "198.51.100.9")
+              assert_eq!(.annotations.summary, "20 failed SSH logins from 198.51.100.9 in 60 s")
+
+  - name: nineteen failures is not a burst
+    inputs:
+      - insert_at: burst_alerts
+        type: vrl
+        source: |
+          start = parse_timestamp!("2026-10-28T03:00:00Z", "%+")
+          . = {"addr": "198.51.100.9", "timestamp": map_values(chunks!(encode_base16(random_bytes!(19)), 2)) -> |_v| { start }}
+    no_outputs_from: [burst_alerts]
+
+  - name: twenty failures spread over more than a minute is not a burst
+    inputs:
+      - insert_at: burst_alerts
+        type: vrl
+        source: |
+          start = parse_timestamp!("2026-10-28T03:00:00Z", "%+")
+          end = parse_timestamp!("2026-10-28T03:01:01Z", "%+")
+          times = map_values(chunks!(encode_base16(random_bytes!(19)), 2)) -> |_v| { start }
+          . = {"addr": "198.51.100.9", "timestamp": push(times, end)}
+    no_outputs_from: [burst_alerts]
+
+  - name: two hundred failures from many addresses within ten minutes is a flood ticket
+    inputs:
+      - insert_at: flood_alerts
+        type: vrl
+        source: |
+          start = parse_timestamp!("2026-10-28T03:00:00Z", "%+")
+          end = parse_timestamp!("2026-10-28T03:09:00Z", "%+")
+          times = map_values(chunks!(encode_base16(random_bytes!(199)), 2)) -> |_v| { start }
+          . = {"addr": ["198.51.100.1", "198.51.100.2", "198.51.100.3"], "timestamp": push(times, end)}
+    outputs:
+      - extract_from: flood_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.alertname, "SSHFailedLoginFlood")
+              assert_eq!(.labels.severity, "ticket")
+              assert_eq!(.annotations.summary, "200 failed SSH logins from 3 addresses in 10 min")
+
+  - name: two hundred failures over more than ten minutes is not a flood
+    inputs:
+      - insert_at: flood_alerts
+        type: vrl
+        source: |
+          start = parse_timestamp!("2026-10-28T03:00:00Z", "%+")
+          end = parse_timestamp!("2026-10-28T03:10:01Z", "%+")
+          times = map_values(chunks!(encode_base16(random_bytes!(199)), 2)) -> |_v| { start }
+          . = {"addr": ["198.51.100.1"], "timestamp": push(times, end)}
+    no_outputs_from: [flood_alerts]
+
+  # ── Listening ports (lines of /proc/net/tcp and tcp6) ──────────────
+  - name: a new port on all addresses pages and ends soon unless seen again
+    inputs:
+      - insert_at: port_alerts
+        type: log
+        log_fields:
+          message: "   4: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 9999999 1 0000000000000000 100 0 0 10 0"
+    outputs:
+      - extract_from: port_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.alertname, "NewListeningPort")
+              assert_eq!(.labels.severity, "page")
+              assert_eq!(.labels.address, "0.0.0.0")
+              assert_eq!(.labels.port, "8080")
+              assert!(!exists(.labels.event_id))
+              assert_eq!(.annotations.summary, "New listening TCP port 0.0.0.0:8080, not in the allow-list")
+              left = to_unix_timestamp(parse_timestamp!(.endsAt, "%+")) - to_unix_timestamp(now())
+              assert!(left >= 88 && left <= 90)
+
+  - name: an ipv6 listener is shown in brackets
+    inputs:
+      - insert_at: port_alerts
+        type: log
+        log_fields:
+          message: "   1: 00000000000000000000000000000000:01BB 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 8050911 1 000000004f44a956 100 0 0 10 0"
+    outputs:
+      - extract_from: port_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.address, "::")
+              assert_eq!(.annotations.summary, "New listening TCP port [::]:443, not in the allow-list")
+
+  - name: an allowed port is quiet
+    inputs:
+      - insert_at: port_alerts
+        type: log
+        log_fields:
+          message: "   1: 00000000:0016 00000000:0000 0A 00000000:00000001 00:00000000 00000000     0        0 8050909 2 0000000034c0c51a 100 0 0 10 0"
+    no_outputs_from: [port_alerts]
+
+  - name: loopback listeners are ignored, in both address families
+    inputs:
+      - insert_at: port_alerts
+        type: log
+        log_fields:
+          message: "   0: 0100007F:1538 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 8050910 1 000000007c55a9db 100 0 0 10 0"
+      - insert_at: port_alerts
+        type: log
+        log_fields:
+          message: "   0: 00000000000000000000000001000000:2385 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 8050912 1 0000000000e3dead 100 0 0 10 0"
+    no_outputs_from: [port_alerts]
+
+  - name: connections and the header line are not listeners
+    inputs:
+      - insert_at: port_alerts
+        type: log
+        log_fields:
+          message: "   2: 0100007F:0016 0100007F:8059 01 00000000:00000000 00:00000000 00000000     0        0 0 1 00000000f24aa15f 20 0 0 10 -1"
+      - insert_at: port_alerts
+        type: log
+        log_fields:
+          message: "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode"
+    no_outputs_from: [port_alerts]
+
+  # ── What leaves Vector ─────────────────────────────────────────────
+  - name: only alertmanager's fields are sent
+    inputs:
+      - insert_at: alertmanager_payload
+        type: log
+        log_fields: {addr: 198.51.100.9, "labels.alertname": X, "annotations.summary": y, endsAt: "2026-10-28T03:05:00+00:00"}
+    outputs:
+      - extract_from: alertmanager_payload
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(keys(.), ["annotations", "endsAt", "labels"])

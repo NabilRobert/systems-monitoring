@@ -1,0 +1,298 @@
+# Security alerts: six detection rules as Vector configuration (Phase 5,
+# ADR-006). Vector reads the logs and the socket table; Alertmanager
+# (deploy/alertmanager/) groups and delivers what comes out.
+#
+#   auth log ─► parse ─┬─ events (login, sudo, sudo refused) ─────────────► to_alertmanager
+#                      └─ failed logins ─► one per connection ─┬─ burst ─► throttle ─┘
+#                                                              └─ flood ─► throttle ─┘
+#   /proc/net/tcp{,6} every 30 s ─► listeners outside the allow-list ───────┘
+#
+# The names and lists (host label, allowed ports, known networks) come from
+# SECURITY_* environment variables at run time (deploy/.env.example). The
+# thresholds and windows are numbers in this file: Vector doesn't expand
+# ${...} in its config unless a flag named
+# --dangerously-allow-env-var-interpolation is set, and it isn't.
+#
+# Unit tests for each rule: deploy/vector/tests/ (run by
+# e2e/test_vector_rules.py).
+
+data_dir: /var/lib/vector
+
+# Only for the container's health check, on loopback (ignored by the port
+# rule, which skips loopback listeners).
+api:
+  enabled: true
+  address: 127.0.0.1:8686
+
+sources:
+  auth_log:
+    type: file
+    include: ["/host/log/auth.log"]
+    # Old lines never alert. The data directory is a tmpfs, so after a
+    # restart reading starts at the end again.
+    read_from: end
+    # Tell files apart by device and inode, so a rotated file is a new file.
+    fingerprint:
+      strategy: device_and_inode
+
+  sockets:
+    type: exec
+    mode: scheduled
+    scheduled:
+      exec_interval_secs: 30
+    # A shell, so the directory can come from the environment (tests point
+    # it at a synthetic table).
+    command: ["sh", "-c", 'cat "${SECURITY_PROC_NET:-/proc/net}/tcp" "${SECURITY_PROC_NET:-/proc/net}/tcp6"']
+    decoding:
+      codec: bytes
+
+transforms:
+  # One auth-log line → one event with .kind, or nothing.
+  parse:
+    type: remap
+    inputs: [auth_log]
+    source: |
+      head, err = parse_regex(.message, r'^(?:\d{4}-\d{2}-\d{2}T\S+|[A-Z][a-z]{2}\s+\d{1,2}\s\d{2}:\d{2}:\d{2})\s+\S+\s+(?P<prog>[^\s\[:]+)(?:\[\d+\])?:\s?(?P<msg>.*)$')
+      if err != null { abort }
+      msg = string!(head.prog) + " " + string!(head.msg)
+      line = .message
+      received = .timestamp
+
+      accepted, err = parse_regex(msg, r'^sshd(?:-session)? Accepted (?P<method>\S+) for (?P<user>\S+) from (?P<addr>\S+) port (?P<port>\d+)')
+      if err == null {
+        . = merge({"kind": "login", "line": line, "timestamp": received}, accepted)
+      } else {
+        # "Failed … for invalid user X from" doesn't match the first pattern
+        # (it expects "for X from"): that attempt is counted once, by its
+        # "Invalid user" line.
+        failed, err = parse_regex(msg, r'^sshd(?:-session)? (?:Failed \S+ for (?P<user>\S+) from (?P<addr>\S+)(?: port (?P<port>\d+))?|Invalid user (?P<user2>\S*) from (?P<addr2>\S+)(?: port (?P<port2>\d+))?|(?:Connection closed by|Disconnected from) (?:authenticating|invalid) user (?P<user3>\S*) (?P<addr3>\S+) port (?P<port3>\d+) \[preauth\])')
+        if err == null {
+          addr = failed.addr
+          if addr == null { addr = failed.addr2 }
+          if addr == null { addr = failed.addr3 }
+          port = failed.port
+          if port == null { port = failed.port2 }
+          if port == null { port = failed.port3 }
+          # Without a port, the line itself identifies the attempt.
+          if port == null { port = line }
+          . = {"kind": "ssh_failure", "addr": addr, "port": port, "line": line, "timestamp": received}
+        } else {
+          sudo, err = parse_regex(msg, r'^sudo\s+(?P<user>\S+) : (?:(?P<reason>[^;]*?) ; )?TTY=\S+ ; PWD=.*? ; USER=(?P<run_as>\S+) ;(?: [A-Z]+=.*? ;)* COMMAND=(?P<command>.*)$')
+          if err != null { abort }
+          kind = if sudo.reason == null || sudo.reason == "" { "sudo" } else { "sudo_refused" }
+          . = merge({"kind": kind, "line": line, "timestamp": received}, sudo)
+        }
+      }
+
+  by_kind:
+    type: route
+    inputs: [parse]
+    route:
+      event: '.kind != "ssh_failure"'
+      failure: '.kind == "ssh_failure"'
+
+  # Login, sudo, sudo refused → one Alertmanager alert each.
+  event_alerts:
+    type: remap
+    inputs: [by_kind.event]
+    source: |
+      ends_at = format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) + 300), format: "%+")
+      labels = {"host": get_env_var("SECURITY_HOST_LABEL") ?? "server", "user": .user, "event_id": uuid_v4()}
+      command = to_string(.command) ?? ""
+      if length(command) > 200 { command = slice!(command, 0, 199) + "…" }
+      # VRL scopes variables to their block, so these are declared first.
+      summary = ""
+      runbook = ""
+      if .kind == "login" {
+        networks = filter(split(get_env_var("SECURITY_KNOWN_NETWORKS") ?? "", ",")) -> |_i, v| { strip_whitespace(v) != "" }
+        known = false
+        for_each(networks) -> |_i, net| {
+          if ip_cidr_contains(strip_whitespace(string(net) ?? ""), string(.addr) ?? "") ?? false { known = true }
+        }
+        where = if known { "a known network" } else { "an unknown address" }
+        labels.alertname = "SSHLogin"
+        labels.severity = if known { "ticket" } else { "page" }
+        labels.source = .addr
+        labels.known_source = to_string(known)
+        summary = "SSH login: " + string!(.user) + " (" + string!(.method) + ") from " + string!(.addr) + ", " + where
+        runbook = "ssh-login"
+      } else if .kind == "sudo" {
+        labels.alertname = "SudoCommand"
+        labels.severity = "page"
+        summary = "sudo: " + string!(.user) + " ran as " + string!(.run_as) + ": " + command
+        runbook = "sudo-command"
+      } else {
+        labels.alertname = "SudoAuthFailure"
+        labels.severity = "page"
+        summary = "sudo refused for " + string!(.user) + " (" + string!(.reason) + "): " + command
+        runbook = "sudo-auth-failure"
+      }
+      . = {
+        "labels": labels,
+        "annotations": {"summary": summary, "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/" + runbook + ".md"},
+        "endsAt": ends_at,
+      }
+
+  # Several lines about one connection (address and source port) count once.
+  one_per_connection:
+    type: dedupe
+    inputs: [by_kind.failure]
+    fields:
+      match: [addr, port]
+    cache:
+      num_events: 10000
+
+  # Up to N failures from one address; then keep only groups that arrived
+  # within the window. A group that started slowly is dropped and the count
+  # starts again, so this is close to, not exactly, a sliding window.
+  burst_groups:
+    type: reduce
+    inputs: [one_per_connection]
+    group_by: [addr]
+    max_events: 20
+    expire_after_ms: 60000
+    merge_strategies:
+      line: discard
+      port: discard
+      kind: discard
+      timestamp: array
+
+  burst_alerts:
+    type: remap
+    inputs: [burst_groups]
+    source: |
+      threshold = 20
+      window = 60
+      times = array!(.timestamp)
+      if length(times) < threshold { abort }
+      span = to_unix_timestamp(timestamp!(times[-1])) - to_unix_timestamp(timestamp!(times[0]))
+      if span > window { abort }
+      . = {
+        "addr": .addr,
+        "labels": {"alertname": "SSHFailedLoginBurst", "severity": "ticket", "host": get_env_var("SECURITY_HOST_LABEL") ?? "server", "source": .addr, "event_id": uuid_v4()},
+        "annotations": {
+          "summary": to_string(length(times)) + " failed SSH logins from " + string!(.addr) + " in " + to_string(window) + " s",
+          "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/ssh-failed-logins.md",
+        },
+        "endsAt": format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) + 300), format: "%+"),
+      }
+
+  # A long attack alerts once per window, not once per group.
+  burst_once_per_window:
+    type: throttle
+    inputs: [burst_alerts]
+    key_field: "{{ addr }}"
+    threshold: 1
+    window_secs: 60
+
+  flood_groups:
+    type: reduce
+    inputs: [one_per_connection]
+    group_by: []
+    max_events: 200
+    expire_after_ms: 600000
+    merge_strategies:
+      addr: flat_unique
+      line: discard
+      port: discard
+      kind: discard
+      timestamp: array
+
+  flood_alerts:
+    type: remap
+    inputs: [flood_groups]
+    source: |
+      threshold = 200
+      window = 600
+      times = array!(.timestamp)
+      if length(times) < threshold { abort }
+      span = to_unix_timestamp(timestamp!(times[-1])) - to_unix_timestamp(timestamp!(times[0]))
+      if span > window { abort }
+      sources = length(array(.addr) ?? [.addr])
+      . = {
+        "labels": {"alertname": "SSHFailedLoginFlood", "severity": "ticket", "host": get_env_var("SECURITY_HOST_LABEL") ?? "server", "event_id": uuid_v4()},
+        "annotations": {
+          "summary": to_string(length(times)) + " failed SSH logins from " + to_string(sources) + " addresses in " + to_string(window / 60) + " min",
+          "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/ssh-failed-logins.md",
+        },
+        "endsAt": format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) + 300), format: "%+"),
+      }
+
+  flood_once_per_window:
+    type: throttle
+    inputs: [flood_alerts]
+    threshold: 1
+    window_secs: 600
+
+  # One /proc/net/tcp line → an alert if it is a listener outside the
+  # allow-list. Re-sent every check with a short end, so it resolves soon
+  # after the port closes.
+  port_alerts:
+    type: remap
+    inputs: [sockets]
+    source: |
+      fields = split(strip_whitespace(string!(.message)), r'\s+')
+      if length(fields) < 4 || fields[3] != "0A" { abort }
+      local = split(string!(fields[1]), ":")
+      hex = string!(local[0])
+      port = parse_int!(local[1], base: 16)
+      # The kernel prints each 32-bit word in host (little-endian) order.
+      words = []
+      for_each(chunks(hex, 8)) -> |_i, chunk| {
+        w = chunk
+        words = push(words, slice!(w, 6, 8) + slice!(w, 4, 6) + slice!(w, 2, 4) + slice!(w, 0, 2))
+      }
+      address = ip_ntop!(decode_base16!(join(words)))
+      is_loopback = ip_cidr_contains!(["127.0.0.0/8", "::1/128", "::ffff:127.0.0.0/104"], address)
+      ignore_loopback = downcase(get_env_var("SECURITY_IGNORE_LOOPBACK") ?? "true") != "false"
+      if is_loopback && ignore_loopback { abort }
+      allowed = false
+      for_each(split(get_env_var("SECURITY_ALLOWED_PORTS") ?? "22", ",")) -> |_i, entry| {
+        entry = strip_whitespace(entry)
+        # VRL evaluates || and && left to right, so the brackets matter.
+        if entry == to_string(port) || (ends_with(entry, ":" + to_string(port)) && contains(entry, address)) {
+          allowed = true
+        }
+      }
+      if allowed { abort }
+      shown = if contains(address, ":") { "[" + address + "]" } else { address }
+      interval = 30
+      . = {
+        "labels": {"alertname": "NewListeningPort", "severity": "page", "host": get_env_var("SECURITY_HOST_LABEL") ?? "server", "address": address, "port": to_string(port)},
+        "annotations": {
+          "summary": "New listening TCP port " + shown + ":" + to_string(port) + ", not in the allow-list",
+          "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/new-listening-port.md",
+        },
+        "endsAt": format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) + 3 * interval), format: "%+"),
+      }
+
+  # Only Alertmanager's fields leave Vector.
+  alertmanager_payload:
+    type: remap
+    inputs: [event_alerts, burst_once_per_window, flood_once_per_window, port_alerts]
+    source: |
+      . = {"labels": .labels, "annotations": .annotations, "endsAt": .endsAt}
+
+sinks:
+  to_alertmanager:
+    type: http
+    inputs: [alertmanager_payload]
+    # Fixed: Vector shares the host network, where Alertmanager is published
+    # on loopback. (Vector does not expand ${...} in config by default.)
+    uri: "http://127.0.0.1:9093/api/v2/alerts"
+    method: post
+    # Alertmanager takes a JSON array of alerts, which is what the json
+    # codec sends for a batch.
+    encoding:
+      codec: json
+    request:
+      headers:
+        Content-Type: application/json
+    batch:
+      timeout_secs: 1
+      max_events: 100
+    # While Alertmanager is down, alerts wait here (bounded) and are retried.
+    buffer:
+      type: memory
+      max_events: 1000
+      when_full: drop_newest

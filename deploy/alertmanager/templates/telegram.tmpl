@@ -1,0 +1,11 @@
+{{/* One Telegram message per notification. With parse_mode HTML,
+     Alertmanager renders this as an HTML template, so label and summary
+     values are escaped by Alertmanager itself (e2e/test_e2e.py checks a
+     summary containing tags). Events list only firing alerts; states also
+     list resolved ones. */}}
+{{ define "telegram.sm.message" -}}
+{{ if eq .Status "firing" }}{{ if eq .CommonLabels.severity "page" }}🔴{{ else }}🟡{{ end }}{{ else }}✅ Resolved:{{ end }} <b>{{ .CommonLabels.alertname }}</b> on {{ .CommonLabels.host }}
+{{ range .Alerts.Firing }}• {{ .Annotations.summary }}
+{{ end }}{{ range .Alerts.Resolved }}• resolved: {{ .Annotations.summary }}
+{{ end }}Runbook: {{ (index .Alerts 0).Annotations.runbook_url }}
+{{- end }}

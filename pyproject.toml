@@ -1,0 +1,40 @@
+[project]
+name = "systems-monitoring"
+version = "0.1.0"
+description = "Monitoring for small live apps on one shared server: security alerts, SLOs, uptime"
+requires-python = ">=3.14"
+license = "MIT"
+# No runtime code: the detection is Vector configuration. These are the
+# test and lint tools.
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "ruff>=0.7",
+    "pyright>=1.1",
+    "pytest>=8.3",
+]
+
+[tool.uv]
+# Only versions published at least two weeks before this was set.
+exclude-newer = "2026-10-14T00:00:00Z"
+package = false
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+extend-select = ["I", "B", "UP"]
+
+[tool.pyright]
+typeCheckingMode = "strict"
+exclude = [".venv"]
+venvPath = "."
+venv = ".venv"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["e2e: needs Docker; runs the stack in e2e/compose.yaml"]
+# The Docker tests run on their own: `uv run pytest -m e2e e2e/`.
+addopts = "-m 'not e2e'"

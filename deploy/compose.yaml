@@ -1,0 +1,62 @@
+# The always-on monitoring stack, slice 1: security alerts.
+# Vector detects (vector/vector.yaml); Alertmanager delivers to Telegram.
+# Run from this directory: `docker compose up -d` (docs/runbook-deploy.md).
+# Nothing here is reachable from outside the server.
+name: systems-monitoring
+
+services:
+  alertmanager:
+    image: prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+      - --data.retention=120h
+      # A single instance: no cluster port.
+      - --cluster.listen-address=
+    ports:
+      - "127.0.0.1:9093:9093"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./alertmanager/templates:/etc/alertmanager/templates:ro
+      - ./secrets:/etc/alertmanager/secrets:ro
+      - alertmanager-data:/alertmanager
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 48m
+    pids_limit: 64
+    restart: unless-stopped
+
+  vector:
+    # The six security rules, as Vector configuration (ADR-006).
+    image: timberio/vector:0.59.0-alpine@sha256:0e36bc2a290039e9b6a5e92f04bd2f133223506f72d09682c1df16c015172b7a
+    command: ["--config", "/etc/vector/vector.yaml"]
+    # The host's network namespace: /proc/net/tcp lists the host's
+    # listeners, and Alertmanager is on the host's loopback.
+    network_mode: host
+    user: "65534:65534"
+    group_add: ["${AUTH_LOG_GID:-4}"]
+    volumes:
+      - ./vector/vector.yaml:/etc/vector/vector.yaml:ro
+      - /var/log:/host/log:ro
+    env_file: .env
+    environment:
+      SECURITY_PROC_NET: /proc/net
+    read_only: true
+    # Vector's checkpoints: lost on restart, so it starts at the log's end.
+    tmpfs: ["/var/lib/vector:size=4m,uid=65534,gid=65534"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    # Measured idle without a cap: 66 MiB; at 64 MB it sat at the cap.
+    mem_limit: 96m
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8686/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    depends_on: [alertmanager]
+    restart: unless-stopped
+
+volumes:
+  alertmanager-data:
