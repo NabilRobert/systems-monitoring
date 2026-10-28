@@ -22,8 +22,9 @@ tested. Every slice costs $0.
 **Order:** 0 → 1 → (2, Arthur) → 3 → 4 → checkpoint → Juku launches →
 5 → 6 → 7 → 8. Slices 3 and 4 don't depend on each other.
 
-**Progress (2026-10-28):** slices 0, 1 and 3 done, locally; the deploy
-runbook covers slices 2 and 3. Nothing is deployed.
+**Progress (2026-10-29):** slices 0, 1, 3 and 4 done, locally; the
+deploy runbook covers slices 2 and 3. Slice 4's GlitchTip failed its
+memory gate, so its fallback is in use ([ADR-004](../adr/0004-glitchtip-behind-memory-gate.md)). Nothing is deployed.
 
 ## Fixed before building (so no choice is made after seeing results)
 

@@ -26,7 +26,7 @@ others were rejected.
 | [ADR-001](0001-alertmanager-only-delivery-path.md) | Alertmanager is the only delivery path |
 | [ADR-002](0002-telegram-not-whatsapp.md) | Telegram, not WhatsApp |
 | [ADR-003](0003-blackbox-probes-not-gatus.md) | blackbox_exporter for probes, not Gatus |
-| [ADR-004](0004-glitchtip-behind-memory-gate.md) | GlitchTip, behind a memory gate |
+| [ADR-004](0004-glitchtip-behind-memory-gate.md) | GlitchTip, behind a memory gate (gate failed: fallback in use) |
 | [ADR-005](0005-victoriametrics-host-metrics-from-vector.md) | VictoriaMetrics, with host metrics from Vector |
 | [ADR-006](0006-security-detection-with-vector.md) | Security detection with Vector, not custom code (settled) |
 | [ADR-007](0007-listening-ports-from-socket-snapshot.md) | New listening ports come from a socket snapshot, not logs |
@@ -43,7 +43,7 @@ others were rejected.
 | 1 | Delivery path ([ADR-001](0001-alertmanager-only-delivery-path.md)) | Alertmanager for everything; Juku's Grafana points at it instead of at Telegram |
 | 2 | Channel ([ADR-002](0002-telegram-not-whatsapp.md)) | Telegram, the same bot as Juku |
 | 3 | Probes ([ADR-003](0003-blackbox-probes-not-gatus.md)) | blackbox_exporter; Gatus only as the fallback |
-| 4 | Errors ([ADR-004](0004-glitchtip-behind-memory-gate.md)) | GlitchTip, only if it passes the 256 MB gate |
+| 4 | Errors ([ADR-004](0004-glitchtip-behind-memory-gate.md)) | **Measured:** GlitchTip failed the 256 MB gate; the fallback (error counts plus traces) is in use |
 | 5 | Metrics ([ADR-005](0005-victoriametrics-host-metrics-from-vector.md)) | VictoriaMetrics, with the cgroup script instead of cAdvisor |
 | 6 | Security detection ([ADR-006](0006-security-detection-with-vector.md), 007) | **Settled:** Vector; detect only; failed logins as silent messages |
 | 7 | Juku's SLOs ([ADR-008](0008-juku-slos-and-error-budgets.md)) | The drafts above, confirmed after two weeks live |

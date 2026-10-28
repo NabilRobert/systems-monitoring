@@ -28,7 +28,7 @@ measured memory.
 with node_exporter and the custom watcher; its rows added up to 384, and
 with Vector's larger cap they would have come to 432, over budget.
 Dropping node_exporter ([ADR-005](0005-victoriametrics-host-metrics-from-vector.md)) brings it back.
-| `glitchtip` and its database, if it passes [ADR-004](0004-glitchtip-behind-memory-gate.md)'s gate | 256 MB | 5 |
+| `glitchtip` and its database: **not deployed**, it failed [ADR-004](0004-glitchtip-behind-memory-gate.md)'s gate | 256 MB was the gate | 4 |
 
 Every cap is a hard `mem_limit`. Idle and busy memory are measured on the
 server once deployed and published next to these numbers.

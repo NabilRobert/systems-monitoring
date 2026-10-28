@@ -23,4 +23,4 @@ Each spike's write-up lives in the decision it settled:
 | Existing detectors vs. custom code (Vector, run against the same end-to-end tests) | Vector adopted; the custom watcher removed | [ADR-006](../adr/0006-security-detection-with-vector.md); code on branch `spike/vector-detectors` |
 | VictoriaMetrics memory gate (30 days of data under a 128 MB cap) | Passed: 15.9 MiB idle, 61.6 MiB peak | [ADR-005](../adr/0005-victoriametrics-host-metrics-from-vector.md) |
 | Vector's host metrics instead of node_exporter | Adopted | [ADR-005](../adr/0005-victoriametrics-host-metrics-from-vector.md) |
-| GlitchTip memory gate | Not run yet (slice 4) | [ADR-004](../adr/0004-glitchtip-behind-memory-gate.md) |
+| GlitchTip memory gate (256 MB, 1,000 events) | Failed: an out-of-memory kill with defaults, nothing ingested when tuned to fit; fallback in use | [ADR-004](../adr/0004-glitchtip-behind-memory-gate.md) |
