@@ -15,7 +15,13 @@ _image = re.search(r"image: (timberio/vector:\S+)", (ROOT / "deploy" / "compose.
 assert _image is not None, "deploy/compose.yaml has no timberio/vector image line"
 VECTOR_IMAGE: str = _image.group(1)
 
-# The settings the tests in deploy/vector/tests/rules.yaml are written for.
+# The pipelines as compose loads them, then every test file.
+CONFIGS = [f"/etc/vector/{name}" for name in ("vector.yaml", "security.yaml", "host-metrics.yaml")]
+TEST_FILES = [
+    f"/etc/vector/tests/{path.name}" for path in sorted((VECTOR_DIR / "tests").glob("*.yaml"))
+]
+
+# The settings the tests in deploy/vector/tests/ are written for.
 TEST_SETTINGS = {
     "HOST_LABEL": "test-host",
     "SECURITY_ALLOWED_PORTS": "22",
@@ -30,7 +36,7 @@ def test_every_vector_rule_test_passes():
         [
             "docker", "run", "--rm", *env_args,
             "-v", f"{VECTOR_DIR}:/etc/vector:ro",
-            VECTOR_IMAGE, "test", "/etc/vector/vector.yaml", "/etc/vector/tests/rules.yaml",
+            VECTOR_IMAGE, "test", *CONFIGS, *TEST_FILES,
         ],
         capture_output=True, text=True, check=False,
     )  # fmt: skip

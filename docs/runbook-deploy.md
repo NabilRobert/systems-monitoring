@@ -110,7 +110,7 @@ it's meant to be public: usually `22,80,443`), or note it as something
 to bind to `127.0.0.1` later. Then check the rules with your settings:
 
 ```bash
-docker compose run --rm --no-deps vector validate --skip-healthchecks /etc/vector/vector.yaml
+docker compose run --rm --no-deps vector validate --skip-healthchecks /etc/vector/vector.yaml /etc/vector/security.yaml /etc/vector/host-metrics.yaml
 ```
 
 Expect `Validated`.
@@ -169,7 +169,7 @@ sudo grep -cE 'Invalid user|Failed|preauth' /var/log/auth.log
 
 If `SSHFailedLoginFlood` fired on an ordinary day, raise
 the flood threshold above the busiest normal 10 minutes: in
-`vector/vector.yaml`, both `max_events: 200` (`flood_groups`) and
+`vector/security.yaml`, both `max_events: 200` (`flood_groups`) and
 `threshold = 200` (`flood_alerts`), then `docker compose up -d vector`. The aim: a flood message means
 something unusual.
 

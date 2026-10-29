@@ -1,0 +1,221 @@
+# Parsing auth-log lines into events (transform `parse`).
+#
+# Unit tests for the rules in ../security.yaml, run with `vector test`
+# (e2e/test_vector_rules.py runs them in the pinned image, with
+# HOST_LABEL=test-host, SECURITY_ALLOWED_PORTS=22,
+# SECURITY_KNOWN_NETWORKS=192.0.2.0/24 and
+# SECURITY_RUNBOOK_BASE=https://example.org/runbooks).
+#
+# Each test feeds one stage and checks what comes out. Vector's own
+# building blocks (dedupe, reduce, throttle, the HTTP sink) are tested by
+# Vector; how they are wired together is tested end to end in e2e/.
+# Addresses are documentation ranges (RFC 5737, RFC 3849). VRL has no
+# `repeat`, so a list of N items is made by splitting N random bytes'
+# hex form into pairs.
+
+tests:
+  - name: an accepted ssh key in rfc 3339 format is a login
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:01.123456+07:00 web-1 sshd[812]: Accepted publickey for deploy from 203.0.113.7 port 51522 ssh2: ED25519 SHA256:abc"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "login")
+              assert_eq!(.user, "deploy")
+              assert_eq!(.method, "publickey")
+              assert_eq!(.addr, "203.0.113.7")
+
+  - name: a classic syslog line is parsed too
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "Oct 28 09:15:00 web-1 sshd[9]: Accepted password for arthur from 2001:db8::5 port 2222 ssh2"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "login")
+              assert_eq!(.method, "password")
+              assert_eq!(.addr, "2001:db8::5")
+
+  - name: openssh 9.8 logs logins from sshd-session
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:01+07:00 web-1 sshd-session[90]: Accepted publickey for deploy from 203.0.113.7 port 51522 ssh2"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: assert_eq!(.kind, "login")
+
+  - name: a failed password for a real user is a failure with its connection
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sshd[7]: Failed password for root from 198.51.100.9 port 4001 ssh2"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "ssh_failure")
+              assert_eq!(.addr, "198.51.100.9")
+              assert_eq!(.port, "4001")
+
+  - name: an invalid user is a failure
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sshd[7]: Invalid user admin from 198.51.100.9 port 4002"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "ssh_failure")
+              assert_eq!(.port, "4002")
+
+  - name: a refused key with key-only ssh is a failure
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sshd[7]: Connection closed by authenticating user root 198.51.100.9 port 4004 [preauth]"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "ssh_failure")
+              assert_eq!(.port, "4004")
+
+  - name: a preauth disconnect from an invalid user is a failure
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sshd[7]: Disconnected from invalid user oracle 198.51.100.9 port 4005 [preauth]"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "ssh_failure")
+              assert_eq!(.port, "4005")
+
+  - name: a failed password for an invalid user is the same connection as its invalid-user line
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sshd[7]: Failed password for invalid user admin from 198.51.100.9 port 4002 ssh2"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "ssh_failure")
+              assert_eq!(.addr, "198.51.100.9")
+              assert_eq!(.port, "4002")
+
+  - name: a sudo command is parsed with who ran what
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sudo:   arthur : TTY=pts/0 ; PWD=/home/arthur ; USER=root ; COMMAND=/usr/bin/systemctl restart caddy"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "sudo")
+              assert_eq!(.user, "arthur")
+              assert_eq!(.run_as, "root")
+              assert_eq!(.command, "/usr/bin/systemctl restart caddy")
+
+  - name: a sudo refusal keeps its reason
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sudo[4411]:     mallory : 3 incorrect password attempts ; TTY=pts/2 ; PWD=/tmp ; USER=root ; COMMAND=/bin/bash"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "sudo_refused")
+              assert_eq!(.reason, "3 incorrect password attempts")
+
+  - name: session messages and other programs are ignored
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sudo: pam_unix(sudo:session): session opened for user root(uid=0) by arthur(uid=1000)"
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 CRON[5]: Accepted publickey for x from 192.0.2.1 port 1"
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "not a log line at all"
+    no_outputs_from: [parse]
+
+  - name: a very long line with unicode is parsed without trouble
+    inputs:
+      - insert_at: parse
+        type: vrl
+        source: |
+          command = "/usr/bin/echo " + encode_base16(random_bytes!(5000)) + " ✓ 日本語"
+          .message = "2026-10-28T10:00:00+07:00 web-1 sudo:   arthur : TTY=pts/0 ; PWD=/home/arthur ; USER=root ; COMMAND=" + command
+    outputs:
+      - extract_from: event_alerts
+        conditions:
+          - type: vrl
+            source: |
+              command = split(string!(.annotations.summary), ": ", 3)[2]
+              assert_eq!(strlen(string!(command)), 200)
+              assert_eq!(.labels.alertname, "SudoCommand")
+
+  - name: a user name with spaces is still a failure, from the real address
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sshd[7]: Invalid user Accepted publickey for root from 203.0.113.1 port 1 ssh2 from 198.51.100.9 port 4002"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "ssh_failure")
+              assert_eq!(.addr, "198.51.100.9")
+              assert_eq!(.port, "4002")
+
+  - name: a user name that copies the preauth line's ending can't plant a false address
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sshd[7]: Connection closed by invalid user a 203.0.113.1 port 1 [preauth] x 198.51.100.9 port 4006 [preauth]"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.addr, "198.51.100.9")
+              assert_eq!(.port, "4006")

@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 
 ROOT = Path(__file__).parent.parent
-RULES = (ROOT / "deploy" / "vector" / "vector.yaml").read_text()
+RULES = (ROOT / "deploy" / "vector" / "security.yaml").read_text()
 METRIC_RULES = (ROOT / "deploy" / "vmalert" / "rules.yml").read_text()
 RUNBOOKS = ROOT / "docs" / "runbooks"
 
@@ -42,7 +42,7 @@ def test_every_metric_alert_links_a_runbook():
 
 def test_every_runbook_an_alert_links_exists():
     missing = [slug for slug in RUNBOOK_SLUGS if not (RUNBOOKS / f"{slug}.md").is_file()]
-    assert RUNBOOK_SLUGS, "found no runbook links in vector.yaml"
+    assert RUNBOOK_SLUGS, "found no runbook links in security.yaml"
     assert missing == []
 
 

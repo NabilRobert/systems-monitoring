@@ -1,6 +1,6 @@
 {{/* One Telegram message per notification. With parse_mode HTML,
      Alertmanager renders this as an HTML template, so label and summary
-     values are escaped by Alertmanager itself (e2e/test_e2e.py checks a
+     values are escaped by Alertmanager itself (e2e/test_e2e_1_security.py checks a
      summary containing tags). Events list only firing alerts; states also
      list resolved ones. */}}
 {{ define "telegram.sm.message" -}}

@@ -44,7 +44,7 @@ account ([ADR-006](docs/adr/0006-security-detection-with-vector.md)).
 
 **Nothing is hand-written that a tool already does.** The detection is
 [Vector](https://vector.dev) configuration
-([`deploy/vector/vector.yaml`](deploy/vector/vector.yaml)): it follows
+([`deploy/vector/security.yaml`](deploy/vector/security.yaml)): it follows
 the auth log through rotation, starts at the end so old lines never
 alert, reads both syslog timestamp formats and OpenSSH 9.8's
 `sshd-session`, counts each failed *connection* once, reads listening

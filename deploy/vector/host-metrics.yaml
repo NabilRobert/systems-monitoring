@@ -1,0 +1,41 @@
+# Host and container metrics for VictoriaMetrics (docs/adr, ADR-005): the
+# server's memory, root disk and load, and each Docker container's memory
+# and CPU, pushed by remote write. Loaded with vector.yaml and
+# security.yaml.
+
+sources:
+  # Host and container metrics for VictoriaMetrics (ADR-005). Vector already
+  # runs, so this replaces node_exporter and a hand-written cgroup script.
+  # It reads the host's /proc and /sys, mounted read-only at /host.
+  host:
+    type: host_metrics
+    scrape_interval_secs: 30
+    namespace: host
+    collectors: [memory, filesystem, load, cgroups]
+    filesystem:
+      mountpoints:
+        includes: ["/"]
+    cgroups:
+      groups:
+        includes: ["system.slice/docker-*"]
+
+transforms:
+  # The real hostname stays out of the metrics: alerts carry HOST_LABEL.
+  host_metrics_tidy:
+    type: remap
+    inputs: [host]
+    source: |
+      del(.tags.host)
+      del(.tags.collector)
+
+sinks:
+  to_victoriametrics:
+    type: prometheus_remote_write
+    inputs: [host_metrics_tidy]
+    endpoint: http://victoriametrics:8428/api/v1/write
+    healthcheck:
+      enabled: false
+    buffer:
+      type: memory
+      max_events: 10000
+      when_full: drop_newest
