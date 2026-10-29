@@ -49,7 +49,7 @@ the first slice (security alerts) now; the rest in slices (see
   - every `sudo` command, and every failed `sudo` authentication;
   - a burst of failed SSH logins: at least N from one source address in
     W seconds, and at least M from all sources in W seconds (defaults
-    in Phase 5, ADR-006).
+    in [ADR-006](../adr/0006-security-detection-with-vector.md)).
 - **S2.** Detect a new listening TCP port, compared with an allow-list of
   expected ports, from a periodic snapshot of the host's sockets.
 - **S3.** Detection only. Nothing in this project changes the firewall,
@@ -64,11 +64,11 @@ the first slice (security alerts) now; the rest in slices (see
 - **U2.** Host memory, disk and load; per-container memory against its
   cap; container restarts and out-of-memory kills.
 - **U3.** Exceptions with stack traces, grouped (GlitchTip, behind a
-  memory gate; Phase 5, ADR-004).
+  memory gate; [ADR-004](../adr/0004-glitchtip-behind-memory-gate.md)).
 
 **SLOs and AI-specific (after Juku is live)**
-- **L1.** SLOs for Juku from its own records (draft targets in Phase 5,
-  ADR-008), with multi-window burn-rate alerts and a monthly report.
+- **L1.** SLOs for Juku from its own records (draft targets in
+  [ADR-008](../adr/0008-juku-slos-and-error-budgets.md)), with multi-window burn-rate alerts and a monthly report.
 - **L2.** Spend per day against Juku's caps, chat refusal and failure
   rates, gateway blocks, and the facts-only fallback rate, from Juku's
   and the gateway's records.

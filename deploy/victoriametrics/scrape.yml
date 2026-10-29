@@ -1,4 +1,4 @@
-# What VictoriaMetrics scrapes (Phase 5, ADR-003 and ADR-005). Host and
+# What VictoriaMetrics scrapes (ADR-003 and ADR-005). Host and
 # container metrics are not scraped: Vector pushes them (remote write).
 global:
   scrape_interval: 30s

@@ -1,6 +1,6 @@
-# Security alerts: six detection rules as Vector configuration (Phase 5,
-# ADR-006). Vector reads the logs and the socket table; Alertmanager
-# (deploy/alertmanager/) groups and delivers what comes out.
+# Security alerts: six detection rules as Vector configuration
+# (docs/adr, ADR-006). Vector reads the logs and the socket table;
+# Alertmanager (deploy/alertmanager/) groups and delivers what comes out.
 #
 #   auth log ─► parse ─┬─ events (login, sudo, sudo refused) ─────────────► to_alertmanager
 #                      └─ failed logins ─► one per connection ─┬─ burst ─► throttle ─┘

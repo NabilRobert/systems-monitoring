@@ -1,5 +1,5 @@
 # vmalert rules: uptime, certificates, host health, and the availability
-# SLOs for the apps already live (Phase 5, ADR-003, ADR-005, ADR-008).
+# SLOs for the apps already live (ADR-003, ADR-005, ADR-008).
 #
 # Inputs, all in VictoriaMetrics:
 # - probe_* from blackbox_exporter (scraped every 30 s), labelled `app`;

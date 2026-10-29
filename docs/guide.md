@@ -146,7 +146,7 @@ pushes (`sources.host` and `sinks.to_victoriametrics` in `vector.yaml`).
 | **amtool** | Alertmanager's command-line tool: check the config, test routes, send or silence alerts | the runbooks, `e2e/test_routes.py` |
 | **Telegram stand-in** | A tiny fake of Telegram's API, so tests deliver messages without the internet | `e2e/telegram_stub.py` |
 | **Mutation check** | Breaking the code on purpose to prove a test notices | described in the README |
-| **SLO, error budget, burn rate** | A reliability target (99.5% of probes succeed over 28 days), the failure it allows (0.5%), and how fast that allowance is being spent (a burn rate of 1 uses it up in exactly 28 days) | ADR-008; `slo-availability` in `deploy/vmalert/rules.yml` |
+| **SLO, error budget, burn rate** | A reliability target (99.5% of probes succeed over 28 days), the failure it allows (0.5%), and how fast that allowance is being spent (a burn rate of 1 uses it up in exactly 28 days) | [ADR-008](adr/0008-juku-slos-and-error-budgets.md); `slo-availability` in `deploy/vmalert/rules.yml` |
 | **Multi-window burn-rate alert** | Alerts only if both a long window (is it serious?) and a short one (is it still happening?) are over the rate, and only with enough probes in the window | `AvailabilityFastBurn` and friends |
 | **Recording rule** | A rule that saves a computed series (an error ratio) for other rules to use | `record:` in `rules.yml` |
 | **VictoriaMetrics, vmalert, vmui** | The metrics store; its rule evaluator; its built-in query page | `deploy/compose.yaml` |

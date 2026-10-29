@@ -1,4 +1,4 @@
-# blackbox_exporter: how each kind of probe is done (Phase 5, ADR-003).
+# blackbox_exporter: how each kind of probe is done (ADR-003).
 # The targets are in deploy/targets/ (on the server only).
 modules:
   # A page or health endpoint answers 200 within 5 s. For https targets the

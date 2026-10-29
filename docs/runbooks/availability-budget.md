@@ -2,7 +2,7 @@
 
 **Means:** an app is failing probes fast enough to use up its monthly
 availability budget early. The SLO is 99.5% of probes succeeding over 28
-days (Phase 5, ADR-008), so the budget is 0.5%: about 3.4 hours a month.
+days ([ADR-008](../adr/0008-juku-slos-and-error-budgets.md)), so the budget is 0.5%: about 3.4 hours a month.
 
 | Alert | Spending | Severity |
 |---|---|---|
@@ -28,7 +28,7 @@ answers, or failing one probe in ten.
 ## What to do
 
 Fix the cause. If the budget for the month is spent, the error-budget
-policy applies (ADR-008): no feature changes to that app until it
+policy applies ([ADR-008](../adr/0008-juku-slos-and-error-budgets.md)): no feature changes to that app until it
 recovers, reliability work only, and a postmortem if one incident spent
 more than 20%.
 

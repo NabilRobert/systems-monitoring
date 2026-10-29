@@ -1,4 +1,4 @@
-# Alertmanager: the only delivery path (Phase 5, ADR-001).
+# Alertmanager: the only delivery path (ADR-001).
 #
 # Two kinds of alert, told apart by the `event_id` label:
 # - events (an SSH login, a sudo command) are one-shot: they end by
