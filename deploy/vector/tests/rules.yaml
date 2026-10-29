@@ -113,13 +113,20 @@ tests:
               assert_eq!(.kind, "ssh_failure")
               assert_eq!(.port, "4005")
 
-  - name: a failed password for an invalid user is left to its invalid-user line
+  - name: a failed password for an invalid user is the same connection as its invalid-user line
     inputs:
       - insert_at: parse
         type: log
         log_fields:
           message: "2026-10-28T10:00:00+07:00 web-1 sshd[7]: Failed password for invalid user admin from 198.51.100.9 port 4002 ssh2"
-    no_outputs_from: [parse]
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "ssh_failure")
+              assert_eq!(.addr, "198.51.100.9")
+              assert_eq!(.port, "4002")
 
   - name: a sudo command is parsed with who ran what
     inputs:
@@ -242,7 +249,7 @@ tests:
               assert_eq!(.labels.severity, "page")
               assert_eq!(.annotations.summary, "sudo refused for mallory (3 incorrect password attempts): /bin/bash")
 
-  - name: every event ends five minutes from now so it never resolves noisily
+  - name: an event leaves its end time to alertmanager so a delayed delivery is not already over
     inputs:
       - insert_at: event_alerts
         type: log
@@ -251,9 +258,7 @@ tests:
       - extract_from: event_alerts
         conditions:
           - type: vrl
-            source: |
-              left = to_unix_timestamp(parse_timestamp!(.endsAt, "%+")) - to_unix_timestamp(now())
-              assert!(left >= 298 && left <= 300)
+            source: assert!(!exists(.endsAt))
 
   # ── Failed-login bursts and floods (on groups made by `reduce`) ────
   - name: twenty failures from one address within a minute is a burst ticket
@@ -403,3 +408,60 @@ tests:
           - type: vrl
             source: |
               assert_eq!(keys(.), ["annotations", "endsAt", "labels"])
+
+  - name: an event is sent without an end time
+    inputs:
+      - insert_at: alertmanager_payload
+        type: log
+        log_fields: {addr: 198.51.100.9, "labels.alertname": SSHLogin, "annotations.summary": y}
+    outputs:
+      - extract_from: alertmanager_payload
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(keys(.), ["annotations", "labels"])
+
+  - name: a very long line with unicode is parsed without trouble
+    inputs:
+      - insert_at: parse
+        type: vrl
+        source: |
+          command = "/usr/bin/echo " + encode_base16(random_bytes!(5000)) + " ✓ 日本語"
+          .message = "2026-10-28T10:00:00+07:00 web-1 sudo:   arthur : TTY=pts/0 ; PWD=/home/arthur ; USER=root ; COMMAND=" + command
+    outputs:
+      - extract_from: event_alerts
+        conditions:
+          - type: vrl
+            source: |
+              command = split(string!(.annotations.summary), ": ", 3)[2]
+              assert_eq!(strlen(string!(command)), 200)
+              assert_eq!(.labels.alertname, "SudoCommand")
+
+  - name: a user name with spaces is still a failure, from the real address
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sshd[7]: Invalid user Accepted publickey for root from 203.0.113.1 port 1 ssh2 from 198.51.100.9 port 4002"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "ssh_failure")
+              assert_eq!(.addr, "198.51.100.9")
+              assert_eq!(.port, "4002")
+
+  - name: a user name that copies the preauth line's ending can't plant a false address
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-10-28T10:00:00+07:00 web-1 sshd[7]: Connection closed by invalid user a 203.0.113.1 port 1 [preauth] x 198.51.100.9 port 4006 [preauth]"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.addr, "198.51.100.9")
+              assert_eq!(.port, "4006")
