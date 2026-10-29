@@ -32,7 +32,10 @@ services:
   vector:
     # The six security rules, and host and container metrics (ADR-005, 006).
     image: timberio/vector:0.59.0-alpine@sha256:0e36bc2a290039e9b6a5e92f04bd2f133223506f72d09682c1df16c015172b7a
-    command: ["--config", "/etc/vector/vector.yaml"]
+    command:
+      - --config=/etc/vector/vector.yaml
+      - --config=/etc/vector/security.yaml
+      - --config=/etc/vector/host-metrics.yaml
     user: "65534:65534"
     group_add: ["${AUTH_LOG_GID:-4}"]
     # Read-only views of the host: its logs, and its /proc and /sys. The
@@ -40,7 +43,7 @@ services:
     # namespace of the host's first process), so Vector needs neither the
     # host's network nor any privilege.
     volumes:
-      - ./vector/vector.yaml:/etc/vector/vector.yaml:ro
+      - ./vector:/etc/vector:ro
       - /var/log:/host/log:ro
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro

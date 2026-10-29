@@ -56,7 +56,7 @@ always-on total becomes 384 MB, exactly the Phase 2 budget) and
 approximate windows on two `ticket` alerts that are calibrated by hand
 anyway. authwatch was removed; it remains in the history of the
 `feat/security-alerts` branch. The rules have their own unit tests
-(`deploy/vector/tests/rules.yaml`, run with `vector test`), each
+(`deploy/vector/tests/`, run with `vector test`), each
 mutation-checked.
 
 **Traps found in the spike, for the record:** VRL scopes variables to

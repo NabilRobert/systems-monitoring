@@ -1,0 +1,81 @@
+# Listening ports, from lines of /proc/net/tcp and tcp6 (`port_alerts`).
+#
+# Unit tests for the rules in ../security.yaml, run with `vector test`
+# (e2e/test_vector_rules.py runs them in the pinned image, with
+# HOST_LABEL=test-host, SECURITY_ALLOWED_PORTS=22,
+# SECURITY_KNOWN_NETWORKS=192.0.2.0/24 and
+# SECURITY_RUNBOOK_BASE=https://example.org/runbooks).
+#
+# Each test feeds one stage and checks what comes out. Vector's own
+# building blocks (dedupe, reduce, throttle, the HTTP sink) are tested by
+# Vector; how they are wired together is tested end to end in e2e/.
+# Addresses are documentation ranges (RFC 5737, RFC 3849). VRL has no
+# `repeat`, so a list of N items is made by splitting N random bytes'
+# hex form into pairs.
+
+tests:
+  - name: a new port on all addresses pages and ends soon unless seen again
+    inputs:
+      - insert_at: port_alerts
+        type: log
+        log_fields:
+          message: "   4: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 9999999 1 0000000000000000 100 0 0 10 0"
+    outputs:
+      - extract_from: port_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.alertname, "NewListeningPort")
+              assert_eq!(.labels.severity, "page")
+              assert_eq!(.labels.address, "0.0.0.0")
+              assert_eq!(.labels.port, "8080")
+              assert!(!exists(.labels.event_id))
+              assert_eq!(.annotations.summary, "New listening TCP port 0.0.0.0:8080, not in the allow-list")
+              left = to_unix_timestamp(parse_timestamp!(.endsAt, "%+")) - to_unix_timestamp(now())
+              assert!(left >= 88 && left <= 90)
+
+  - name: an ipv6 listener is shown in brackets
+    inputs:
+      - insert_at: port_alerts
+        type: log
+        log_fields:
+          message: "   1: 00000000000000000000000000000000:01BB 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 8050911 1 000000004f44a956 100 0 0 10 0"
+    outputs:
+      - extract_from: port_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.address, "::")
+              assert_eq!(.annotations.summary, "New listening TCP port [::]:443, not in the allow-list")
+
+  - name: an allowed port is quiet
+    inputs:
+      - insert_at: port_alerts
+        type: log
+        log_fields:
+          message: "   1: 00000000:0016 00000000:0000 0A 00000000:00000001 00:00000000 00000000     0        0 8050909 2 0000000034c0c51a 100 0 0 10 0"
+    no_outputs_from: [port_alerts]
+
+  - name: loopback listeners are ignored, in both address families
+    inputs:
+      - insert_at: port_alerts
+        type: log
+        log_fields:
+          message: "   0: 0100007F:1538 00000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 8050910 1 000000007c55a9db 100 0 0 10 0"
+      - insert_at: port_alerts
+        type: log
+        log_fields:
+          message: "   0: 00000000000000000000000001000000:2385 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000     0        0 8050912 1 0000000000e3dead 100 0 0 10 0"
+    no_outputs_from: [port_alerts]
+
+  - name: connections and the header line are not listeners
+    inputs:
+      - insert_at: port_alerts
+        type: log
+        log_fields:
+          message: "   2: 0100007F:0016 0100007F:8059 01 00000000:00000000 00:00000000 00000000     0        0 0 1 00000000f24aa15f 20 0 0 10 -1"
+      - insert_at: port_alerts
+        type: log
+        log_fields:
+          message: "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode"
+    no_outputs_from: [port_alerts]

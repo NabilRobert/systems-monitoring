@@ -38,7 +38,7 @@ services:
     group_add: !reset []
     env_file: !reset []
     volumes: !override
-      - ./vector/vector.yaml:/etc/vector/vector.yaml:ro
+      - ./vector:/etc/vector:ro
       - ../e2e/out/log:/host/log:ro
       - ../e2e/out/net:/fake/net:ro
       - /proc:/host/proc:ro

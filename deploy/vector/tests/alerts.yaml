@@ -1,0 +1,193 @@
+# Turning events into alerts: logins, sudo, bursts and floods, and what
+# is sent to Alertmanager.
+#
+# Unit tests for the rules in ../security.yaml, run with `vector test`
+# (e2e/test_vector_rules.py runs them in the pinned image, with
+# HOST_LABEL=test-host, SECURITY_ALLOWED_PORTS=22,
+# SECURITY_KNOWN_NETWORKS=192.0.2.0/24 and
+# SECURITY_RUNBOOK_BASE=https://example.org/runbooks).
+#
+# Each test feeds one stage and checks what comes out. Vector's own
+# building blocks (dedupe, reduce, throttle, the HTTP sink) are tested by
+# Vector; how they are wired together is tested end to end in e2e/.
+# Addresses are documentation ranges (RFC 5737, RFC 3849). VRL has no
+# `repeat`, so a list of N items is made by splitting N random bytes'
+# hex form into pairs.
+
+tests:
+  - name: a login from an unknown address pages
+    inputs:
+      - insert_at: event_alerts
+        type: log
+        log_fields: {kind: login, user: deploy, method: publickey, addr: 203.0.113.7}
+    outputs:
+      - extract_from: event_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.alertname, "SSHLogin")
+              assert_eq!(.labels.severity, "page")
+              assert_eq!(.labels.known_source, "false")
+              assert_eq!(.labels.host, "test-host")
+              assert!(is_string(.labels.event_id))
+              assert_eq!(.annotations.summary, "SSH login: deploy (publickey) from 203.0.113.7, an unknown address")
+              assert_eq!(.annotations.runbook_url, "https://example.org/runbooks/ssh-login.md")
+
+  - name: a login from a known network is a silent ticket
+    inputs:
+      - insert_at: event_alerts
+        type: log
+        log_fields: {kind: login, user: arthur, method: publickey, addr: 192.0.2.44}
+    outputs:
+      - extract_from: event_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.severity, "ticket")
+              assert_eq!(.labels.known_source, "true")
+
+  - name: a sudo command pages with the command
+    inputs:
+      - insert_at: event_alerts
+        type: log
+        log_fields: {kind: sudo, user: arthur, run_as: root, command: /usr/bin/id}
+    outputs:
+      - extract_from: event_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.alertname, "SudoCommand")
+              assert_eq!(.labels.severity, "page")
+              assert_eq!(.annotations.summary, "sudo: arthur ran as root: /usr/bin/id")
+
+  - name: a long sudo command is cut to 200 characters
+    inputs:
+      - insert_at: event_alerts
+        type: vrl
+        source: |
+          . = {"kind": "sudo", "user": "a", "run_as": "root", "command": encode_base16(random_bytes!(150))}
+    outputs:
+      - extract_from: event_alerts
+        conditions:
+          - type: vrl
+            source: |
+              command = split(string!(.annotations.summary), ": ", 3)[2]
+              assert_eq!(strlen(string!(command)), 200)
+              assert!(ends_with(string!(command), "…"))
+
+  - name: a refused sudo pages with the reason
+    inputs:
+      - insert_at: event_alerts
+        type: log
+        log_fields: {kind: sudo_refused, user: mallory, run_as: root, command: /bin/bash, reason: "3 incorrect password attempts"}
+    outputs:
+      - extract_from: event_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.alertname, "SudoAuthFailure")
+              assert_eq!(.labels.severity, "page")
+              assert_eq!(.annotations.summary, "sudo refused for mallory (3 incorrect password attempts): /bin/bash")
+
+  - name: an event leaves its end time to alertmanager so a delayed delivery is not already over
+    inputs:
+      - insert_at: event_alerts
+        type: log
+        log_fields: {kind: sudo, user: a, run_as: root, command: /bin/true}
+    outputs:
+      - extract_from: event_alerts
+        conditions:
+          - type: vrl
+            source: assert!(!exists(.endsAt))
+
+  - name: twenty failures from one address within a minute is a burst ticket
+    inputs:
+      - insert_at: burst_alerts
+        type: vrl
+        source: |
+          start = parse_timestamp!("2026-10-28T03:00:00Z", "%+")
+          end = parse_timestamp!("2026-10-28T03:00:45Z", "%+")
+          times = map_values(chunks!(encode_base16(random_bytes!(19)), 2)) -> |_v| { start }
+          . = {"addr": "198.51.100.9", "timestamp": push(times, end)}
+    outputs:
+      - extract_from: burst_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.alertname, "SSHFailedLoginBurst")
+              assert_eq!(.labels.severity, "ticket")
+              assert_eq!(.labels.source, "198.51.100.9")
+              assert_eq!(.annotations.summary, "20 failed SSH logins from 198.51.100.9 in 60 s")
+
+  - name: nineteen failures is not a burst
+    inputs:
+      - insert_at: burst_alerts
+        type: vrl
+        source: |
+          start = parse_timestamp!("2026-10-28T03:00:00Z", "%+")
+          . = {"addr": "198.51.100.9", "timestamp": map_values(chunks!(encode_base16(random_bytes!(19)), 2)) -> |_v| { start }}
+    no_outputs_from: [burst_alerts]
+
+  - name: twenty failures spread over more than a minute is not a burst
+    inputs:
+      - insert_at: burst_alerts
+        type: vrl
+        source: |
+          start = parse_timestamp!("2026-10-28T03:00:00Z", "%+")
+          end = parse_timestamp!("2026-10-28T03:01:01Z", "%+")
+          times = map_values(chunks!(encode_base16(random_bytes!(19)), 2)) -> |_v| { start }
+          . = {"addr": "198.51.100.9", "timestamp": push(times, end)}
+    no_outputs_from: [burst_alerts]
+
+  - name: two hundred failures from many addresses within ten minutes is a flood ticket
+    inputs:
+      - insert_at: flood_alerts
+        type: vrl
+        source: |
+          start = parse_timestamp!("2026-10-28T03:00:00Z", "%+")
+          end = parse_timestamp!("2026-10-28T03:09:00Z", "%+")
+          times = map_values(chunks!(encode_base16(random_bytes!(199)), 2)) -> |_v| { start }
+          . = {"addr": ["198.51.100.1", "198.51.100.2", "198.51.100.3"], "timestamp": push(times, end)}
+    outputs:
+      - extract_from: flood_alerts
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.labels.alertname, "SSHFailedLoginFlood")
+              assert_eq!(.labels.severity, "ticket")
+              assert_eq!(.annotations.summary, "200 failed SSH logins from 3 addresses in 10 min")
+
+  - name: two hundred failures over more than ten minutes is not a flood
+    inputs:
+      - insert_at: flood_alerts
+        type: vrl
+        source: |
+          start = parse_timestamp!("2026-10-28T03:00:00Z", "%+")
+          end = parse_timestamp!("2026-10-28T03:10:01Z", "%+")
+          times = map_values(chunks!(encode_base16(random_bytes!(199)), 2)) -> |_v| { start }
+          . = {"addr": ["198.51.100.1"], "timestamp": push(times, end)}
+    no_outputs_from: [flood_alerts]
+
+  - name: only alertmanager's fields are sent
+    inputs:
+      - insert_at: alertmanager_payload
+        type: log
+        log_fields: {addr: 198.51.100.9, "labels.alertname": X, "annotations.summary": y, endsAt: "2026-10-28T03:05:00+00:00"}
+    outputs:
+      - extract_from: alertmanager_payload
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(keys(.), ["annotations", "endsAt", "labels"])
+
+  - name: an event is sent without an end time
+    inputs:
+      - insert_at: alertmanager_payload
+        type: log
+        log_fields: {addr: 198.51.100.9, "labels.alertname": SSHLogin, "annotations.summary": y}
+    outputs:
+      - extract_from: alertmanager_payload
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(keys(.), ["annotations", "labels"])

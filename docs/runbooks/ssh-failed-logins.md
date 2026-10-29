@@ -5,7 +5,7 @@
   60 s.
 - **Flood:** at least 200 from **all** addresses within 10 minutes.
 
-The numbers are in `deploy/vector/vector.yaml` (`burst_groups`,
+The numbers are in `deploy/vector/security.yaml` (`burst_groups`,
 `burst_alerts`, `flood_groups`, `flood_alerts`). The windows are close
 to, not exactly, sliding windows: a group that starts slowly is dropped
 and the count starts again.
