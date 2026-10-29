@@ -7,10 +7,12 @@ Addresses are documentation ranges (RFC 5737).
 """
 
 import json
+import os
 import shlex
 import shutil
 import subprocess
 import time
+import urllib.parse
 from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -22,6 +24,9 @@ pytestmark = pytest.mark.e2e
 ROOT = Path(__file__).parent.parent
 OUT = ROOT / "e2e" / "out"
 FIXTURES = ROOT / "tests" / "fixtures"
+# Compose reads HOST_LABEL for vmalert's host label, as from deploy/.env on
+# the server.
+COMPOSE_ENV = {**os.environ, "HOST_LABEL": "e2e-host"}
 COMPOSE = [
     "docker",
     "compose",
@@ -100,13 +105,17 @@ def stack() -> Iterator[Path]:
     (OUT / "log" / "auth.log").write_text(
         line("Accepted publickey for oldsession from 203.0.113.99 port 1 ssh2")
     )
-    subprocess.run([*COMPOSE, "up", "-d", "--build", "--wait"], check=True, cwd=ROOT)
+    subprocess.run(
+        [*COMPOSE, "up", "-d", "--build", "--wait"], check=True, cwd=ROOT, env=COMPOSE_ENV
+    )
     try:
         yield OUT
     finally:
         if not messages():
-            subprocess.run([*COMPOSE, "logs", "--no-color"], check=False, cwd=ROOT)
-        subprocess.run([*COMPOSE, "down", "-v", "--remove-orphans"], check=True, cwd=ROOT)
+            subprocess.run([*COMPOSE, "logs", "--no-color"], check=False, cwd=ROOT, env=COMPOSE_ENV)
+        subprocess.run(
+            [*COMPOSE, "down", "-v", "--remove-orphans"], check=True, cwd=ROOT, env=COMPOSE_ENV
+        )
 
 
 def append(*lines: str) -> float:
@@ -204,8 +213,64 @@ def test_hand_sent_delivery_test_arrives(stack: Path):
         [*COMPOSE, "exec", "-T", *shlex.split(args.replace('"$(date +%s)"', "e2e-drill"))],
         check=True,
         cwd=ROOT,
+        env=COMPOSE_ENV,
     )
     check(wait_for("Test alert: delivery works"), sent_at, silent=False)
+
+
+def query_metrics(promql: str) -> list[dict[str, object]]:
+    """An instant query to VictoriaMetrics, from inside the compose network."""
+    url = "http://victoriametrics:8428/api/v1/query?query=" + urllib.parse.quote(promql)
+    out = subprocess.run(
+        [*COMPOSE, "exec", "-T", "vector", "wget", "-q", "-O", "-", url],
+        check=True, cwd=ROOT, env=COMPOSE_ENV, capture_output=True, text=True,
+    ).stdout  # fmt: skip
+    result = json.loads(out)["data"]["result"]
+    assert isinstance(result, list)
+    return result  # pyright: ignore[reportUnknownVariableType]
+
+
+def wait_for_metric(promql: str, timeout: float = 90.0) -> list[dict[str, object]]:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        result = query_metrics(promql)
+        if result:
+            return result
+        time.sleep(5)
+    raise AssertionError(f"no result for {promql!r} in {timeout} s")
+
+
+def test_host_metrics_from_vector_reach_victoriametrics(stack: Path):
+    assert wait_for_metric("host_load1")
+    assert wait_for_metric('host_filesystem_used_ratio{mountpoint="/"}')
+    assert wait_for_metric("host_memory_oom_kill_events_total")
+    # The real hostname is dropped; alerts carry HOST_LABEL instead.
+    assert query_metrics('count({__name__=~"host_.+", host!=""})') == []
+
+
+def test_probes_of_a_healthy_app_succeed(stack: Path):
+    [result] = wait_for_metric('probe_success{app="demo-app"}')
+    value = result["value"]
+    assert isinstance(value, list)
+    assert value[1] == "1"  # pyright: ignore[reportUnknownMemberType]
+
+
+def test_vmalert_records_the_slo_error_ratios(stack: Path):
+    # Proves vmalert is running and writing its recording rules back.
+    assert wait_for_metric('app:probe_error:ratio_5m{app="demo-app"}', timeout=120)
+
+
+def test_app_down_pages_then_resolves(stack: Path):
+    subprocess.run([*COMPOSE, "stop", "demo-app"], check=True, cwd=ROOT, env=COMPOSE_ENV)
+    stopped_at = time.time()
+    # 3 minutes of failed probes, plus scrape, evaluation and grouping.
+    message = wait_for("<b>AppDown</b> on e2e-host", timeout=360)
+    assert "demo-app is down: every probe of http://demo-app:8080/health failed" in text_of(message)
+    took = float(message["received_at"]) - stopped_at  # pyright: ignore[reportArgumentType]
+    with (OUT / "latency.txt").open("a") as f:
+        f.write(f"AppDown after stopping the app\t{took:.1f}\n")
+    subprocess.run([*COMPOSE, "start", "demo-app"], check=True, cwd=ROOT, env=COMPOSE_ENV)
+    wait_for("✅ Resolved: <b>AppDown</b>", timeout=240)
 
 
 def test_old_lines_and_allowed_ports_never_alert(stack: Path):
@@ -215,3 +280,13 @@ def test_old_lines_and_allowed_ports_never_alert(stack: Path):
     assert "oldsession" not in all_text
     assert ":22" not in all_text
     assert "5432" not in all_text
+
+
+def test_nothing_else_alerted(stack: Path):
+    """No alert fired that no test caused (a startup false alarm, for example)."""
+    expected = {
+        "SSHLogin", "SudoCommand", "SudoAuthFailure", "SSHFailedLoginBurst",
+        "SSHFailedLoginFlood", "NewListeningPort", "DeliveryTest", "AppDown",
+    }  # fmt: skip
+    names = {text_of(m).split("<b>", 1)[1].split("</b>", 1)[0] for m in messages()}
+    assert names - expected == set()

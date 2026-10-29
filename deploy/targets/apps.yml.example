@@ -1,0 +1,9 @@
+# Copy to deploy/targets/apps.yml on the server and fill in the domains.
+# apps.yml is git-ignored: the repo names no server or domain.
+# Juku is added once it is live.
+- targets: ["https://<mcp-backbone-domain>/healthz"]
+  labels:
+    app: mcp-backbone
+- targets: ["https://<pitstop-demo-domain>/api/health"]
+  labels:
+    app: pitstop-demo

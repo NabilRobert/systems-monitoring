@@ -1,0 +1,13 @@
+# blackbox_exporter: how each kind of probe is done (Phase 5, ADR-003).
+# The targets are in deploy/targets/ (on the server only).
+modules:
+  # A page or health endpoint answers 200 within 5 s. For https targets the
+  # probe also reports the certificate's expiry (probe_ssl_earliest_cert_expiry).
+  http_2xx:
+    prober: http
+    timeout: 5s
+    http:
+      method: GET
+      valid_status_codes: [200]
+      preferred_ip_protocol: ip4
+      follow_redirects: true

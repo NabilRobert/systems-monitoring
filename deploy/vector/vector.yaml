@@ -42,9 +42,24 @@ sources:
       exec_interval_secs: 30
     # A shell, so the directory can come from the environment (tests point
     # it at a synthetic table).
-    command: ["sh", "-c", 'cat "${SECURITY_PROC_NET:-/proc/net}/tcp" "${SECURITY_PROC_NET:-/proc/net}/tcp6"']
+    command: ["sh", "-c", 'cat "${SECURITY_PROC_NET:-/host/proc/1/net}/tcp" "${SECURITY_PROC_NET:-/host/proc/1/net}/tcp6"']
     decoding:
       codec: bytes
+
+  # Host and container metrics for VictoriaMetrics (ADR-005). Vector already
+  # runs, so this replaces node_exporter and a hand-written cgroup script.
+  # It reads the host's /proc and /sys, mounted read-only at /host.
+  host:
+    type: host_metrics
+    scrape_interval_secs: 30
+    namespace: host
+    collectors: [memory, filesystem, load, cgroups]
+    filesystem:
+      mountpoints:
+        includes: ["/"]
+    cgroups:
+      groups:
+        includes: ["system.slice/docker-*"]
 
 transforms:
   # One auth-log line → one event with .kind, or nothing.
@@ -97,7 +112,7 @@ transforms:
     inputs: [by_kind.event]
     source: |
       ends_at = format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) + 300), format: "%+")
-      labels = {"host": get_env_var("SECURITY_HOST_LABEL") ?? "server", "user": .user, "event_id": uuid_v4()}
+      labels = {"host": get_env_var("HOST_LABEL") ?? "server", "user": .user, "event_id": uuid_v4()}
       command = to_string(.command) ?? ""
       if length(command) > 200 { command = slice!(command, 0, 199) + "…" }
       # VRL scopes variables to their block, so these are declared first.
@@ -169,7 +184,7 @@ transforms:
       if span > window { abort }
       . = {
         "addr": .addr,
-        "labels": {"alertname": "SSHFailedLoginBurst", "severity": "ticket", "host": get_env_var("SECURITY_HOST_LABEL") ?? "server", "source": .addr, "event_id": uuid_v4()},
+        "labels": {"alertname": "SSHFailedLoginBurst", "severity": "ticket", "host": get_env_var("HOST_LABEL") ?? "server", "source": .addr, "event_id": uuid_v4()},
         "annotations": {
           "summary": to_string(length(times)) + " failed SSH logins from " + string!(.addr) + " in " + to_string(window) + " s",
           "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/ssh-failed-logins.md",
@@ -210,7 +225,7 @@ transforms:
       if span > window { abort }
       sources = length(array(.addr) ?? [.addr])
       . = {
-        "labels": {"alertname": "SSHFailedLoginFlood", "severity": "ticket", "host": get_env_var("SECURITY_HOST_LABEL") ?? "server", "event_id": uuid_v4()},
+        "labels": {"alertname": "SSHFailedLoginFlood", "severity": "ticket", "host": get_env_var("HOST_LABEL") ?? "server", "event_id": uuid_v4()},
         "annotations": {
           "summary": to_string(length(times)) + " failed SSH logins from " + to_string(sources) + " addresses in " + to_string(window / 60) + " min",
           "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/ssh-failed-logins.md",
@@ -258,13 +273,21 @@ transforms:
       shown = if contains(address, ":") { "[" + address + "]" } else { address }
       interval = 30
       . = {
-        "labels": {"alertname": "NewListeningPort", "severity": "page", "host": get_env_var("SECURITY_HOST_LABEL") ?? "server", "address": address, "port": to_string(port)},
+        "labels": {"alertname": "NewListeningPort", "severity": "page", "host": get_env_var("HOST_LABEL") ?? "server", "address": address, "port": to_string(port)},
         "annotations": {
           "summary": "New listening TCP port " + shown + ":" + to_string(port) + ", not in the allow-list",
           "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/new-listening-port.md",
         },
         "endsAt": format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) + 3 * interval), format: "%+"),
       }
+
+  # The real hostname stays out of the metrics: alerts carry HOST_LABEL.
+  host_metrics_tidy:
+    type: remap
+    inputs: [host]
+    source: |
+      del(.tags.host)
+      del(.tags.collector)
 
   # Only Alertmanager's fields leave Vector.
   alertmanager_payload:
@@ -277,9 +300,9 @@ sinks:
   to_alertmanager:
     type: http
     inputs: [alertmanager_payload]
-    # Fixed: Vector shares the host network, where Alertmanager is published
-    # on loopback. (Vector does not expand ${...} in config by default.)
-    uri: "http://127.0.0.1:9093/api/v2/alerts"
+    # Fixed (Vector doesn't expand ${...} in its config by default); both
+    # containers are on the compose network.
+    uri: "http://alertmanager:9093/api/v2/alerts"
     method: post
     # Alertmanager takes a JSON array of alerts, which is what the json
     # codec sends for a batch.
@@ -295,4 +318,15 @@ sinks:
     buffer:
       type: memory
       max_events: 1000
+      when_full: drop_newest
+
+  to_victoriametrics:
+    type: prometheus_remote_write
+    inputs: [host_metrics_tidy]
+    endpoint: http://victoriametrics:8428/api/v1/write
+    healthcheck:
+      enabled: false
+    buffer:
+      type: memory
+      max_events: 10000
       when_full: drop_newest

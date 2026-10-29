@@ -119,17 +119,39 @@ the only Sentry-compatible option light enough to try.
   in memory and roll over at 5,000; they're for one request, not for
   counting.
 
-### ADR-005: VictoriaMetrics, not Prometheus
+### ADR-005: VictoriaMetrics, with host metrics from Vector
 
 **Decision:** VictoriaMetrics single-node stores metrics (30 days,
-`-retentionPeriod=30d`) and scrapes the exporters itself. `vmalert`
-evaluates the rules. Caps: 128 MB and 32 MB. **Gate:** under its cap at
-idle and while answering a 30-day range query, measured in slice 3.
+`-retentionPeriod=30d`) and scrapes the prober itself. `vmalert`
+evaluates the rules. Caps: 128 MB and 32 MB.
 
-Container memory comes from a short script that reads each container's
-cgroup files (`memory.current`, `memory.max`, the `oom_kill` count in
-`memory.events`) every 30 s and writes them for node_exporter's textfile
-collector.
+**Gate (passed, slice 3, 2026-10-28):** 30 days of data shaped like
+ours (2,500 series, one point a minute) stored, then the container
+restarted under its 128 MB cap: **15.9 MiB idle**, and **61.6 MiB peak**
+while answering three 30-day range queries (each under 0.13 s). No
+out-of-memory kill. Loading those 30 days in bulk did *not* fit under the
+cap (killed twice, even one series per request): any backfill runs
+uncapped, offline.
+
+**Host and container metrics come from Vector's `host_metrics` source**
+(memory, the root filesystem, load, each Docker container's memory and
+CPU, and the kernel's out-of-memory kill count), pushed to
+VictoriaMetrics by remote write. Vector already runs for ADR-006, so this
+replaces both node_exporter and the hand-written cgroup script planned
+here, and saves a container (reuse before building).
+
+What it can't give: a container's memory *cap*, and container names (it
+reports cgroup IDs). So the planned "container over 90% of its cap" alert
+became **"the kernel killed a process for lack of memory"**, which is what
+a container reaching its cap actually causes, and what a user would
+notice. Per-container memory stays in VictoriaMetrics for diagnosis.
+
+**Traps found, both fixed and tested:**
+- MetricsQL's `increase()` counts a series' *first* value as an increase.
+  The out-of-memory counter is cumulative since boot, so every Vector
+  restart would have paged. The rule uses `increase_prometheus()`.
+- "No host metrics for 5 minutes" would fire for the half-minute before
+  Vector's first push on every deploy. It waits one minute first.
 
 **Why:**
 - At this scale (a few thousand series), VictoriaMetrics commonly runs in
@@ -146,6 +168,8 @@ collector.
   series. It is the fallback if VictoriaMetrics misbehaves.
 - *cAdvisor for container metrics:* commonly 50–150 MB to report a few
   numbers per container that the cgroup files already hold.
+- *node_exporter plus a cgroup script (the first plan):* a container and
+  a hand-written script for what Vector, already running, reports.
 - *No metrics store (Juku's Postgres only):* Postgres records can't see
   host memory, disk, other apps or probes.
 - *A hosted metrics service:* an account, and data leaving the server.
@@ -217,13 +241,20 @@ must be writable by its user.
 
 ### ADR-007: New listening ports come from a socket snapshot, not logs
 
-**Decision:** every 30 s, the detector (ADR-006) reads the host's `/proc/net/tcp` and
-`/proc/net/tcp6` (the container uses the host's network namespace,
-read-only, no capabilities) and alerts on any listening socket not in an
-allow-list (`22`, `80`, `443`, and so on, set on the server). The alert
+**Decision:** every 30 s, the detector (ADR-006) reads the host's
+socket tables and alerts on any listening socket not in an allow-list (`22`, `80`, `443`, and so on, set on the server). The alert
 stays firing while the port listens and resolves when it closes.
 Loopback-only listeners are ignored by default: they aren't reachable
 from outside, and Docker creates them constantly.
+
+**How it sees the host's sockets:** the host's `/proc` is mounted
+read-only, and `/host/proc/1/net/tcp` (and `tcp6`) are the tables of the
+network namespace of the host's first process: the host's own. So the
+container needs neither the host's network nor any capability. (The first
+version used the host's network; slice 3 moved Vector onto the compose
+network so it can reach Alertmanager and VictoriaMetrics by name.
+Checked: as `nobody` with no capabilities, it sees the same listeners as
+a host-network container.)
 
 **Why:** nothing logs "a port started listening". Reading `/proc` needs
 no tools in the image and no privileges.
@@ -287,7 +318,11 @@ same).
 Juku has little traffic, so a 1-hour window may hold five chat turns, and
 one slow answer would look like a fire. **The fast and slow rules need at
 least 10 valid events in the long window**; below that, only the 3-day
-rule judges. Probe-based SLOs have 60 events an hour and need no floor.
+rule judges. Probe-based SLOs have 120 probes an hour, but right after a
+deploy a window may hold only a few, so their burn alerts also need most
+of the window's probes first (100 of 120 in an hour; 600 of 720 in 6
+hours; 6,000 of 8,640 in 3 days). Found in slice 3: without it, one
+failed probe in the first minutes after a deploy paged.
 
 **Error-budget policy** (Arthur's commitment, as the only engineer):
 - Budget left: ship normally.
@@ -342,21 +377,38 @@ where it stops.
 | Container | Cap | Slice |
 |---|---|---|
 | `alertmanager` | 48 MB | 1 |
-| `vector` (security detection) | 96 MB | 1 |
+| `vector` (security detection; host metrics from slice 3) | 128 MB | 1 |
+| `victoriametrics` | 128 MB | 3 |
+| `vmalert` | 32 MB | 3 |
 | `blackbox` | 32 MB | 3 |
-| `victoriametrics` | 128 MB | 4 |
-| `vmalert` | 32 MB | 4 |
-| `node-exporter` (with the cgroup textfile script) | 48 MB | 4 |
-| `slo-check` (runs every 5 min, exits) | 48 MB | 6 |
-| **Always-on total** | **384 MB** (Phase 2, NF1: at most 384) | |
+| **Always-on total** | **368 MB** (Phase 2, NF1: at most 384) | |
+| `slo-check` (runs every 5 min for seconds, then exits) | 48 MB | 5 |
+| **Peak, while `slo-check` runs** | **416 MB: over budget (open, below)** | |
+
+*Measured in slice 3's end-to-end run (Docker Desktop, arm64), peak:*
+Vector 95.5 MiB (74–79 steady; it was capped at 96 MB, too tight, so
+raised to 128), VictoriaMetrics 106 MiB (it fills its cache allowance on
+purpose), Alertmanager 19.8, blackbox 16.5, vmalert 14.9.
+
+**Open for slice 5:** with `slo-check` the peak is 416 MB. Either the
+budget rises to about 420 MB, or `slo-check` is measured and fits in
+what's left (16 MB, unlikely for Python), or blackbox and vmalert drop
+to 24 MB each (both peaked under 17 MiB). To decide with `slo-check`'s
+measured memory.
+
+*Correction, 2026-10-28:* the first version of this table said 336 MB
+with node_exporter and the custom watcher; its rows added up to 384, and
+with Vector's larger cap they would have come to 432, over budget.
+Dropping node_exporter (ADR-005) brings it back.
 | `glitchtip` and its database, if it passes ADR-004's gate | 256 MB | 5 |
 
 Every cap is a hard `mem_limit`. Idle and busy memory are measured on the
 server once deployed and published next to these numbers.
 
 **Cut order if the server is short of memory** (decided now, not under
-pressure): GlitchTip first; then VictoriaMetrics, `vmalert` and
-node_exporter, replaced by Gatus alone (uptime and certificates only).
+pressure): GlitchTip first; then VictoriaMetrics and `vmalert`, replaced
+by Gatus alone (uptime and certificates only), with Vector's host metrics
+turned off.
 **Never cut** the security detector or Alertmanager.
 
 ### ADR-012: Frameworks and plain code

@@ -4,8 +4,8 @@
 # - Alertmanager's Telegram receiver points at a local stand-in (its
 #   config is a copy with only `api_url` replaced), with dummy secrets;
 # - Vector reads a synthetic log and a synthetic socket table instead
-#   of the host's, and shares Alertmanager's network namespace instead of
-#   the host's (so 127.0.0.1:9093 still reaches Alertmanager).
+#   of the host's (the host metrics are the real ones from Docker's VM);
+# - blackbox probes a stand-in app (`demo-app`) instead of the real ones.
 # Paths are relative to deploy/, the first compose file's directory.
 name: systems-monitoring-e2e
 
@@ -35,19 +35,34 @@ services:
         condition: service_healthy
 
   vector:
-    # Shares Alertmanager's network namespace, so 127.0.0.1:9093 reaches it
-    # as on the server.
-    network_mode: !override "service:alertmanager"
     group_add: !reset []
     env_file: !reset []
     volumes: !override
       - ./vector/vector.yaml:/etc/vector/vector.yaml:ro
       - ../e2e/out/log:/host/log:ro
       - ../e2e/out/net:/fake/net:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
     environment:
       SECURITY_PROC_NET: /fake/net
-      SECURITY_HOST_LABEL: e2e-host
+      HOST_LABEL: e2e-host
       SECURITY_ALLOWED_PORTS: "22"
       SECURITY_KNOWN_NETWORKS: 192.0.2.0/24
       SECURITY_RUNBOOK_BASE: https://example.org/runbooks
-      TZ: Asia/Jakarta
+
+  # A stand-in for a live app: a health endpoint the test can stop.
+  demo-app:
+    image: python:3.14.10-slim@sha256:3cabfd7d7aaf394e6040e79fa1eec6ca1c52b74ed9188650472695d9a9326999
+    command: ["python", "-m", "http.server", "8080", "--directory", "/srv"]
+    volumes:
+      - ../e2e/demo-app:/srv:ro
+    read_only: true
+    cap_drop: [ALL]
+    mem_limit: 64m
+
+  victoriametrics:
+    ports: !reset []
+    volumes: !override
+      - ./victoriametrics/scrape.yml:/etc/victoriametrics/scrape.yml:ro
+      - ../e2e/targets:/etc/victoriametrics/targets:ro
+      - victoriametrics-data:/victoria-metrics-data

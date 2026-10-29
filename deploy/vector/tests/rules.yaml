@@ -1,6 +1,6 @@
 # Unit tests for the rules in ../vector.yaml, run with `vector test`
 # (e2e/test_vector_rules.py runs them in the pinned image, with
-# SECURITY_HOST_LABEL=test-host, SECURITY_ALLOWED_PORTS=22,
+# HOST_LABEL=test-host, SECURITY_ALLOWED_PORTS=22,
 # SECURITY_KNOWN_NETWORKS=192.0.2.0/24 and
 # SECURITY_RUNBOOK_BASE=https://example.org/runbooks).
 #

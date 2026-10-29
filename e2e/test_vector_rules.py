@@ -17,7 +17,7 @@ VECTOR_IMAGE: str = _image.group(1)
 
 # The settings the tests in deploy/vector/tests/rules.yaml are written for.
 TEST_SETTINGS = {
-    "SECURITY_HOST_LABEL": "test-host",
+    "HOST_LABEL": "test-host",
     "SECURITY_ALLOWED_PORTS": "22",
     "SECURITY_KNOWN_NETWORKS": "192.0.2.0/24",
     "SECURITY_RUNBOOK_BASE": "https://example.org/runbooks",

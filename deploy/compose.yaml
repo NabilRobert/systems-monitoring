@@ -1,5 +1,7 @@
 # The always-on monitoring stack, slice 1: security alerts.
-# Vector detects (vector/vector.yaml); Alertmanager delivers to Telegram.
+# Vector detects and collects host metrics (vector/); blackbox probes the
+# apps; VictoriaMetrics stores; vmalert evaluates the rules (vmalert/);
+# Alertmanager delivers everything to Telegram (alertmanager/).
 # Run from this directory: `docker compose up -d` (docs/runbook-deploy.md).
 # Nothing here is reachable from outside the server.
 name: systems-monitoring
@@ -28,35 +30,117 @@ services:
     restart: unless-stopped
 
   vector:
-    # The six security rules, as Vector configuration (ADR-006).
+    # The six security rules, and host and container metrics (ADR-005, 006).
     image: timberio/vector:0.59.0-alpine@sha256:0e36bc2a290039e9b6a5e92f04bd2f133223506f72d09682c1df16c015172b7a
     command: ["--config", "/etc/vector/vector.yaml"]
-    # The host's network namespace: /proc/net/tcp lists the host's
-    # listeners, and Alertmanager is on the host's loopback.
-    network_mode: host
     user: "65534:65534"
     group_add: ["${AUTH_LOG_GID:-4}"]
+    # Read-only views of the host: its logs, and its /proc and /sys. The
+    # host's listening sockets are /host/proc/1/net/tcp (the network
+    # namespace of the host's first process), so Vector needs neither the
+    # host's network nor any privilege.
     volumes:
       - ./vector/vector.yaml:/etc/vector/vector.yaml:ro
       - /var/log:/host/log:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
     env_file: .env
     environment:
-      SECURITY_PROC_NET: /proc/net
+      SECURITY_PROC_NET: /host/proc/1/net
+      PROCFS_ROOT: /host/proc
+      SYSFS_ROOT: /host/sys
     read_only: true
     # Vector's checkpoints: lost on restart, so it starts at the log's end.
     tmpfs: ["/var/lib/vector:size=4m,uid=65534,gid=65534"]
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    # Measured idle without a cap: 66 MiB; at 64 MB it sat at the cap.
-    mem_limit: 96m
+    # Measured: 66 MiB idle with security rules only; 74-79 MiB steady with
+    # host metrics too, peaking at 95 MiB while 200 failed logins arrived at
+    # once (end-to-end test). 96 MB was too tight.
+    mem_limit: 128m
     pids_limit: 64
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8686/health"]
       interval: 30s
       timeout: 5s
       retries: 3
-    depends_on: [alertmanager]
+    depends_on: [alertmanager, victoriametrics]
+    restart: unless-stopped
+
+  victoriametrics:
+    # Metrics for 30 days (ADR-005). Memory gate: 15.9 MiB idle and 61.6 MiB
+    # peak on 30-day queries over 30 days of data, under this cap.
+    image: victoriametrics/victoria-metrics:v1.154.0@sha256:4bd592341587d669b7f57d54bbb82bd21ac8675f4e24234b7703a7c0f85197d8
+    command:
+      - -retentionPeriod=30d
+      - -memory.allowedPercent=60
+      - -promscrape.config=/etc/victoriametrics/scrape.yml
+    ports:
+      - "127.0.0.1:8428:8428"
+    volumes:
+      - ./victoriametrics/scrape.yml:/etc/victoriametrics/scrape.yml:ro
+      - ./targets:/etc/victoriametrics/targets:ro
+      - victoriametrics-data:/victoria-metrics-data
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 128m
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8428/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  vmalert:
+    image: victoriametrics/vmalert:v1.154.0@sha256:f11d77f9ff68dfd63c871d0e59ae7b479f9c3fd0e8a685fef690fb88b794d938
+    command:
+      - -datasource.url=http://victoriametrics:8428
+      # Where the recording rules (the SLO error ratios) are written; vmalert
+      # won't start without it when the rules include any.
+      - -remoteWrite.url=http://victoriametrics:8428
+      - -notifier.url=http://alertmanager:9093
+      - -rule=/etc/vmalert/rules.yml
+      - -evaluationInterval=30s
+      # Same as the unit tests (deploy/vmalert/tests/).
+      - -disableAlertgroupLabel
+      - -external.label=host=${HOST_LABEL:-server}
+    volumes:
+      - ./vmalert/rules.yml:/etc/vmalert/rules.yml:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 32m
+    pids_limit: 32
+    depends_on: [victoriametrics, alertmanager]
+    # Without this, a vmalert that can't start (a bad flag or rule) would
+    # restart quietly while `docker compose up --wait` reports success.
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8880/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  blackbox:
+    # Probes each app over HTTP(S) and reads its certificate (ADR-003).
+    image: prom/blackbox-exporter:v0.29.0@sha256:9613f2884689b6fad9f1939f6a3b0388c93a022cfaededb19545b329b5c83dea
+    command: ["--config.file=/etc/blackbox/blackbox.yml"]
+    volumes:
+      - ./blackbox/blackbox.yml:/etc/blackbox/blackbox.yml:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 32m
+    pids_limit: 32
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:9115/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     restart: unless-stopped
 
 volumes:
   alertmanager-data:
+  victoriametrics-data:

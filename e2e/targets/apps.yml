@@ -1,0 +1,4 @@
+# The e2e test's only probe target: the stand-in app in compose.override.yaml.
+- targets: ["http://demo-app:8080/health"]
+  labels:
+    app: demo-app

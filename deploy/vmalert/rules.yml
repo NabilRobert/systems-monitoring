@@ -1,0 +1,171 @@
+# vmalert rules: uptime, certificates, host health, and the availability
+# SLOs for the apps already live (Phase 5, ADR-003, ADR-005, ADR-008).
+#
+# Inputs, all in VictoriaMetrics:
+# - probe_* from blackbox_exporter (scraped every 30 s), labelled `app`;
+# - host_* from Vector's host_metrics source (pushed every 30 s).
+#
+# Every alert is a *state*: it stays firing while true and Alertmanager
+# sends "Resolved" when it stops. vmalert adds `host` from its
+# -external.label flag. Unit tests: deploy/vmalert/tests/.
+
+groups:
+  - name: apps
+    interval: 30s
+    rules:
+      - alert: AppDown
+        # Every probe failed for 3 minutes: one bad probe isn't an outage.
+        expr: max by (app, instance) (max_over_time(probe_success{job="probe"}[3m])) == 0
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.app }} is down: every probe of {{ $labels.instance }} failed for 3 minutes"
+          runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/app-down.md
+
+      - alert: ProbesNotRunning
+        # Without the prober, AppDown can't fire: this says so.
+        expr: max(up{job="blackbox"}) == 0 or absent(up{job="blackbox"})
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "The uptime prober has not answered for 5 minutes: app outages would go unnoticed"
+          runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/probes-not-running.md
+
+      - alert: CertificateExpiresSoon
+        # Renewal normally happens 30 days ahead, so 14 days means it failed.
+        expr: (min by (app, instance) (probe_ssl_earliest_cert_expiry) - time()) / 86400 < 14
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The certificate for {{ $labels.instance }} expires in {{ $value | printf \"%.0f\" }} days"
+          runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/certificate-expires.md
+
+      - alert: CertificateExpiresVerySoon
+        expr: (min by (app, instance) (probe_ssl_earliest_cert_expiry) - time()) / 86400 < 3
+        labels:
+          severity: page
+        annotations:
+          summary: "The certificate for {{ $labels.instance }} expires in {{ $value | printf \"%.1f\" }} days"
+          runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/certificate-expires.md
+
+  - name: host
+    interval: 30s
+    rules:
+      - alert: DiskAlmostFull
+        expr: max(host_filesystem_used_ratio{mountpoint="/"}) > 0.85
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The root disk is {{ $value | humanizePercentage }} full"
+          runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/disk-full.md
+
+      - alert: DiskFull
+        expr: max(host_filesystem_used_ratio{mountpoint="/"}) > 0.95
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "The root disk is {{ $value | humanizePercentage }} full: writes will start failing"
+          runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/disk-full.md
+
+      - alert: HostMemoryLow
+        expr: max(host_memory_available_bytes) / max(host_memory_total_bytes) < 0.10
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Only {{ $value | humanizePercentage }} of the server's memory is available"
+          runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/memory.md
+
+      - alert: OutOfMemoryKill
+        # A container that reaches its memory cap is killed by the kernel:
+        # this is how "a container hit its cap" shows up (ADR-005).
+        # increase_prometheus, not increase: the counter is cumulative since
+        # boot, and MetricsQL's increase() counts a series' first value as
+        # an increase, which would page on every Vector restart.
+        expr: increase_prometheus(host_memory_oom_kill_events_total[10m]) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "The kernel killed a process for lack of memory in the last 10 minutes"
+          runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/memory.md
+
+      - alert: MonitoringPipelineSilent
+        # Host metrics and security detection both run in Vector: no host
+        # metrics for 5 minutes means security alerts may be down too.
+        expr: absent_over_time(host_load1[5m])
+        # Not in the half-minute before Vector's first push after a deploy.
+        for: 1m
+        labels:
+          severity: page
+        annotations:
+          summary: "Vector has sent no host metrics for 5 minutes: security alerts may not be working"
+          runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/monitoring-pipeline-silent.md
+
+  # Availability SLO: 99.5% of probes succeed over 28 days (ADR-008), so
+  # the error budget is 0.5%. A burn rate of 1 spends it in exactly 28 days.
+  - name: slo-availability
+    interval: 30s
+    rules:
+      - record: app:probe_error:ratio_5m
+        expr: 1 - avg by (app) (avg_over_time(probe_success{job="probe"}[5m]))
+      - record: app:probe_error:ratio_30m
+        expr: 1 - avg by (app) (avg_over_time(probe_success{job="probe"}[30m]))
+      - record: app:probe_error:ratio_1h
+        expr: 1 - avg by (app) (avg_over_time(probe_success{job="probe"}[1h]))
+      - record: app:probe_error:ratio_6h
+        expr: 1 - avg by (app) (avg_over_time(probe_success{job="probe"}[6h]))
+      - record: app:probe_error:ratio_3d
+        expr: 1 - avg by (app) (avg_over_time(probe_success{job="probe"}[3d]))
+
+      # How many probes each window holds. Right after a deploy a window
+      # has only a few, and one failure would look like a high error rate,
+      # so each burn alert also needs most of its window's probes
+      # (probes come every 30 s: 120 an hour).
+      - record: app:probe:count_1h
+        expr: sum by (app) (count_over_time(probe_success{job="probe"}[1h]))
+      - record: app:probe:count_6h
+        expr: sum by (app) (count_over_time(probe_success{job="probe"}[6h]))
+      - record: app:probe:count_3d
+        expr: sum by (app) (count_over_time(probe_success{job="probe"}[3d]))
+
+      # 2% of the 28-day budget in 1 hour: burn rate 0.02 × 672 h / 1 h = 13.44.
+      - alert: AvailabilityFastBurn
+        expr: |
+          app:probe_error:ratio_1h > 13.44 * 0.005
+          and app:probe_error:ratio_5m > 13.44 * 0.005
+          and app:probe:count_1h >= 100
+        labels:
+          severity: page
+          slo: availability
+        annotations:
+          summary: "{{ $labels.app }} is spending its availability budget fast: 2% of the month's budget in an hour"
+          runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/availability-budget.md
+
+      # 5% in 6 hours: 0.05 × 672 / 6 = 5.6.
+      - alert: AvailabilitySlowBurn
+        expr: |
+          app:probe_error:ratio_6h > 5.6 * 0.005
+          and app:probe_error:ratio_30m > 5.6 * 0.005
+          and app:probe:count_6h >= 600
+        labels:
+          severity: page
+          slo: availability
+        annotations:
+          summary: "{{ $labels.app }} has spent 5% of the month's availability budget in 6 hours"
+          runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/availability-budget.md
+
+      # 10% in 3 days: 0.1 × 672 / 72 = 0.933.
+      - alert: AvailabilityBudgetTrend
+        expr: |
+          app:probe_error:ratio_3d > 0.933 * 0.005
+          and app:probe_error:ratio_6h > 0.933 * 0.005
+          and app:probe:count_3d >= 6000
+        labels:
+          severity: ticket
+          slo: availability
+        annotations:
+          summary: "{{ $labels.app }} is on course to spend its whole availability budget this month"
+          runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/availability-budget.md
