@@ -85,12 +85,12 @@ that kept the whole always-on stack at **368 MB** of memory caps.
 
 | Check | What it proves |
 |---|---|
-| 28 rule tests (`vector test`) | Each security rule on real sshd, sudo and `/proc/net/tcp` line shapes: what alerts, at what severity, with what text, and what stays quiet |
+| 32 rule tests (`vector test`) | Each security rule on real sshd, sudo and `/proc/net/tcp` line shapes: what alerts, at what severity, with what text, and what stays quiet; crafted user names can't plant a false address |
 | 19 rule tests (`vmalert-tool unittest`) | Each uptime, host and SLO rule on made-up series over time (up to 3 days): when it fires, and when it must not, including right after a deploy |
-| 36 mutations of the rules | 15 of the security rules and 19 of the metric rules (an off-by-one threshold, a missed log format, a dropped "enough probes" floor, `increase` instead of `increase_prometheus`…) and 2 of the runbook links: each makes a test fail |
+| 40 mutations of the rules | 19 of the security rules and 19 of the metric rules (an off-by-one threshold, a missed log format, a dropped "enough probes" floor, `increase` instead of `increase_prometheus`…) and 2 of the runbook links: each makes a test fail |
 | 7 routing tests | `amtool` from the pinned image: the config is valid, and each kind of alert reaches the right receiver |
-| 13 end-to-end tests, in Docker | The **production** compose file (images, hardening, caps, routing, health checks) with stand-ins for Telegram's API and for an app: each security alert from a synthetic log line or socket table to a delivered message, within 60 s; host metrics and probe results reaching VictoriaMetrics; the app stopped → AppDown → restarted → Resolved; no alert that no test caused |
-| 4 runbook tests | Every alert in both rule sets links a runbook that exists and is indexed |
+| 15 end-to-end tests, in Docker | The **production** compose file (images, hardening, caps, routing, health checks) with stand-ins for Telegram's API and for an app: each security alert from a synthetic log line or socket table to a delivered message, within 60 s; host metrics and probe results reaching VictoriaMetrics; the app stopped → AppDown → restarted → Resolved; a login straight after log rotation; a login during an Alertmanager outage, delivered afterwards; no alert that no test caused |
+| 6 quick tests | Every alert in both rule sets links a runbook that exists and is indexed; every relative link in the docs resolves |
 
 Measured locally (Docker Desktop, arm64), peaks during the end-to-end run:
 

@@ -14,7 +14,7 @@ Part of the [architecture decisions](README.md).
 | `NewListeningPort` | [ADR-007](0007-listening-ports-from-socket-snapshot.md) | `page` |
 
 Each event is its own Alertmanager alert (a unique `event_id`), ending
-five minutes later, so one event is one message and never "resolves".
+five minutes after Alertmanager receives it, so one event is one message and never "resolves".
 Labels carry a configured host name, never the real hostname. Failed
 logins are `ticket` because with key-only SSH they can't succeed and
 every public server is scanned all day; a *successful* login and every
@@ -64,3 +64,21 @@ their block; it evaluates `a || b && c` left to right; the HTTP sink's
 `json` codec already sends a batch as a JSON array (adding `[`…`]` made
 Alertmanager answer 400 and drop the batch); and Vector's data directory
 must be writable by its user.
+
+**Break-it pass (2026-10-29), found and fixed, each now a test:**
+- *Events buffered through a long Alertmanager outage were lost.* Vector
+  stamped each event's end time when it created it, so after an outage
+  of more than 5 minutes they arrived already over and were never sent.
+  Events now carry no end time; Alertmanager ends them `resolve_timeout`
+  (5 min) after it receives them. (The custom watcher had handled this;
+  the Vector port had lost it.)
+- *Failed logins with a space in the user name weren't counted,* so a
+  scanner could stay under the burst threshold. sshd logs the name as
+  given. The name is now matched greedily, and the address and port are
+  taken from the end of the line, where sshd writes them; a name that
+  contains "from <address> port <n>" or "[preauth]" can't plant a false
+  address.
+- Checked and already fine: a login written straight into a freshly
+  rotated log, a 10 KB line with non-Latin text, and an Alertmanager
+  restart with an alert waiting.
+

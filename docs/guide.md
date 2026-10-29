@@ -58,7 +58,9 @@ Follow one line: `Accepted publickey for deploy from 203.0.113.7 port 51522`.
    (`alertname: SSHLogin`, `severity: page`, the host label, the user, a
    unique `event_id`), checks whether the address is in a known network
    (then `severity: ticket`, a silent message), writes the summary and
-   the runbook link, and sets `endsAt` five minutes ahead.
+   the runbook link. It sets no end time: Alertmanager ends a one-shot
+   event five minutes after it *receives* it, so an alert that waited in
+   Vector's buffer through an Alertmanager outage still arrives.
 7. **Only Alertmanager's fields leave:** `transforms.alertmanager_payload`.
 8. **Vector sends it:** `sinks.to_alertmanager` posts a JSON list of
    alerts to `http://127.0.0.1:9093/api/v2/alerts`. If Alertmanager is
@@ -135,7 +137,7 @@ pushes (`sources.host` and `sinks.to_victoriametrics` in `vector.yaml`).
 | **group_wait, group_interval** | How long Alertmanager waits to gather alerts into one message, and how often it sends updates for a group | `alertmanager.yml` |
 | **Page, ticket** | The two severities: a page buzzes the phone; a ticket arrives silently | the `severity` label |
 | **Event, state** | An event happens once (a login) and ends by itself after 5 minutes; a state stays true until it isn't (a port open) and gets a "Resolved" message | the `event_id` label marks events |
-| **endsAt** | When Alertmanager should treat an alert as over unless it's sent again | set in each `*_alerts` transform |
+| **endsAt** | When Alertmanager should treat an alert as over unless it's sent again. Events leave it out (Alertmanager adds 5 minutes on receipt); open-port alerts set it 90 s ahead and re-send | `port_alerts`; `resolve_timeout` in `alertmanager.yml` |
 | **Runbook** | What an alert means and what to do about it, one per alert | `docs/runbooks/` |
 | **Known network** | Addresses whose SSH logins arrive silently (your own) | `SECURITY_KNOWN_NETWORKS` |
 | **Allow-list** | Ports that are expected to listen publicly | `SECURITY_ALLOWED_PORTS` |
