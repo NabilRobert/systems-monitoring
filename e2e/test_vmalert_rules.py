@@ -32,10 +32,12 @@ def test_every_alert_rule_test_passes():
             "-v", f"{VMALERT_DIR}:/etc/vmalert:ro",
             "-w", "/etc/vmalert/tests",
             TOOL_IMAGE, "unittest", "--disableAlertgroupLabel",
-            "--files=/etc/vmalert/tests/rules_test.yml",
+            "--files=/etc/vmalert/tests/*_test.yml",
         ],
         capture_output=True, text=True, check=False,
     )  # fmt: skip
     output = result.stdout + result.stderr
     assert result.returncode == 0, output
+    # One "Unit Testing: <file>" line per test file: both must have run.
+    assert output.count("Unit Testing:") == 2, output
     assert "SUCCESS" in output, output

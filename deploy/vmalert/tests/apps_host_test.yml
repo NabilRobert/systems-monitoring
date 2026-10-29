@@ -1,0 +1,212 @@
+# Unit tests for ../rules.yml: uptime, certificates and host health. Run with
+#   vmalert-tool unittest --disableAlertgroupLabel --files=deploy/vmalert/tests/*_test.yml
+# (e2e/test_vmalert_rules.py runs them in the pinned image).
+#
+# Each test: series values over time (one per `interval`; `_` is a missing
+# sample, `1x5` is six 1s, so `1x98 0` is 99 successes then a failure),
+# then which alerts are expected at given times.
+# vmalert-tool's clock starts at 2000-01-01T00:00:00Z (946684800), which
+# matters for the certificate tests: their expiry times are that plus 10,
+# 2 and 30 days.
+
+rule_files:
+  - ../rules.yml
+evaluation_interval: 30s
+
+tests:
+
+  # AppDown fires only after every probe failed for 3 minutes.
+  - interval: 30s
+    input_series:
+      - series: 'probe_success{job="probe",app="mcp-backbone",instance="https://mcp.test/healthz"}'
+        values: "1 1 0x10"
+    alert_rule_test:
+      - eval_time: 2m30s
+        alertname: AppDown
+        exp_alerts: []
+      - eval_time: 4m30s
+        alertname: AppDown
+        exp_alerts:
+          - exp_labels: {app: mcp-backbone, instance: "https://mcp.test/healthz", severity: page}
+            exp_annotations:
+              summary: "mcp-backbone is down: every probe of https://mcp.test/healthz failed for 3 minutes"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/app-down.md
+
+  # A flapping app (every other probe fails) is not "down".
+  - interval: 30s
+    input_series:
+      - series: 'probe_success{job="probe",app="mcp-backbone",instance="https://mcp.test/healthz"}'
+        values: "0 1 0 1 0 1 0 1 0 1 0 1 0 1"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: AppDown
+        exp_alerts: []
+
+  # No prober for 5 minutes pages, whether it answers "down" or is missing.
+  - interval: 30s
+    input_series:
+      - series: 'up{job="blackbox"}'
+        values: "0x14"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: ProbesNotRunning
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: ProbesNotRunning
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "The uptime prober has not answered for 5 minutes: app outages would go unnoticed"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/probes-not-running.md
+  - interval: 30s
+    input_series:
+      - series: 'unrelated{job="other"}'
+        values: "1x14"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: ProbesNotRunning
+        exp_alerts:
+          - exp_labels: {job: blackbox, severity: page}
+            exp_annotations:
+              summary: "The uptime prober has not answered for 5 minutes: app outages would go unnoticed"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/probes-not-running.md
+
+  # A certificate 10 days from expiry is a ticket; 2 days also pages; 30 days is fine.
+  - interval: 1m
+    input_series:
+      - series: 'probe_ssl_earliest_cert_expiry{job="probe",app="mcp-backbone",instance="https://mcp.test/healthz"}'
+        values: "947548800x3"
+      - series: 'probe_ssl_earliest_cert_expiry{job="probe",app="pitstop-demo",instance="https://pit.test/api/health"}'
+        values: "946857600x3"
+      - series: 'probe_ssl_earliest_cert_expiry{job="probe",app="juku",instance="https://juku.test/"}'
+        values: "949276800x3"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: CertificateExpiresSoon
+        exp_alerts:
+          - exp_labels: {app: mcp-backbone, instance: "https://mcp.test/healthz", severity: ticket}
+            exp_annotations:
+              summary: "The certificate for https://mcp.test/healthz expires in 10 days"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/certificate-expires.md
+          - exp_labels: {app: pitstop-demo, instance: "https://pit.test/api/health", severity: ticket}
+            exp_annotations:
+              summary: "The certificate for https://pit.test/api/health expires in 2 days"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/certificate-expires.md
+      - eval_time: 1m
+        alertname: CertificateExpiresVerySoon
+        exp_alerts:
+          - exp_labels: {app: pitstop-demo, instance: "https://pit.test/api/health", severity: page}
+            exp_annotations:
+              summary: "The certificate for https://pit.test/api/health expires in 2.0 days"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/certificate-expires.md
+
+  # Disk: 90% full is a ticket after 15 minutes, not before.
+  - interval: 1m
+    input_series:
+      - series: 'host_filesystem_used_ratio{mountpoint="/"}'
+        values: "0.9x20"
+      - series: 'host_filesystem_used_ratio{mountpoint="/boot"}'
+        values: "0.99x20"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DiskAlmostFull
+        exp_alerts: []
+      - eval_time: 16m
+        alertname: DiskAlmostFull
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "The root disk is 90% full"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/disk-full.md
+      - eval_time: 16m
+        alertname: DiskFull
+        exp_alerts: []
+
+  # Disk: 97% full pages after 5 minutes.
+  - interval: 1m
+    input_series:
+      - series: 'host_filesystem_used_ratio{mountpoint="/"}'
+        values: "0.97x10"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: DiskFull
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "The root disk is 97% full: writes will start failing"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/disk-full.md
+
+  # Memory: 5% available for 5 minutes pages; 20% doesn't.
+  - interval: 1m
+    input_series:
+      - series: 'host_memory_available_bytes'
+        values: "50x10"
+      - series: 'host_memory_total_bytes'
+        values: "1000x10"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HostMemoryLow
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "Only 5% of the server's memory is available"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/memory.md
+  - interval: 1m
+    input_series:
+      - series: 'host_memory_available_bytes'
+        values: "200x10"
+      - series: 'host_memory_total_bytes'
+        values: "1000x10"
+    alert_rule_test:
+      - eval_time: 6m
+        alertname: HostMemoryLow
+        exp_alerts: []
+
+  # An out-of-memory kill pages; the counter's first value (kills since
+  # boot, seen when Vector starts) doesn't.
+  - interval: 1m
+    input_series:
+      - series: 'host_memory_oom_kill_events_total'
+        values: "3 3 3 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: OutOfMemoryKill
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: OutOfMemoryKill
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "The kernel killed a process for lack of memory in the last 10 minutes"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/memory.md
+      - eval_time: 19m
+        alertname: OutOfMemoryKill
+        exp_alerts: []
+
+  # Vector silent for 5 minutes pages; while it reports, nothing.
+  - interval: 1m
+    input_series:
+      - series: 'host_load1'
+        values: "1x5 _x10"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: MonitoringPipelineSilent
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: MonitoringPipelineSilent
+        exp_alerts:
+          - exp_labels: {severity: page}
+            exp_annotations:
+              summary: "Vector has sent no host metrics for 5 minutes: security alerts may not be working"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/monitoring-pipeline-silent.md
+
+  # Just after a deploy: no host metrics until Vector's first push, a
+  # minute in. "Vector is silent" waits that long before paging.
+  - interval: 30s
+    input_series:
+      - series: 'host_load1'
+        values: "_ _ 1x10"
+    alert_rule_test:
+      - eval_time: 30s
+        alertname: MonitoringPipelineSilent
+        exp_alerts: []
