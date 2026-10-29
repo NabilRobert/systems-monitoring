@@ -77,10 +77,14 @@ transforms:
       if err == null {
         . = merge({"kind": "login", "line": line, "timestamp": received}, accepted)
       } else {
-        # "Failed … for invalid user X from" doesn't match the first pattern
-        # (it expects "for X from"): that attempt is counted once, by its
-        # "Invalid user" line.
-        failed, err = parse_regex(msg, r'^sshd(?:-session)? (?:Failed \S+ for (?P<user>\S+) from (?P<addr>\S+)(?: port (?P<port>\d+))?|Invalid user (?P<user2>\S*) from (?P<addr2>\S+)(?: port (?P<port2>\d+))?|(?:Connection closed by|Disconnected from) (?:authenticating|invalid) user (?P<user3>\S*) (?P<addr3>\S+) port (?P<port3>\d+) \[preauth\])')
+        # sshd logs whatever user name was tried, spaces included, so the
+        # name is matched greedily and the address and port are taken from
+        # the end of the line, where sshd writes them: a name containing
+        # "from <address> port <n>" can't plant a false address, and spaced
+        # names still count towards a burst. A "Failed … for invalid user X"
+        # line and its "Invalid user X" line are the same connection
+        # (address and port), so one_per_connection counts them once.
+        failed, err = parse_regex(msg, r'^sshd(?:-session)? (?:Failed \S+ for (?P<user>.*) from (?P<addr>\S+) port (?P<port>\d+)(?: ssh2.*)?$|Invalid user (?P<user2>.*) from (?P<addr2>\S+)(?: port (?P<port2>\d+))?$|(?:Connection closed by|Disconnected from) (?:authenticating|invalid) user (?P<user3>.*) (?P<addr3>\S+) port (?P<port3>\d+) \[preauth\]$)')
         if err == null {
           addr = failed.addr
           if addr == null { addr = failed.addr2 }
@@ -111,7 +115,10 @@ transforms:
     type: remap
     inputs: [by_kind.event]
     source: |
-      ends_at = format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) + 300), format: "%+")
+      # No endsAt on one-shot events: Alertmanager then ends them
+      # resolve_timeout (5 min) after it *receives* them. Stamping it here
+      # would make events buffered through an Alertmanager outage of more
+      # than 5 minutes arrive already over, and never be sent.
       labels = {"host": get_env_var("HOST_LABEL") ?? "server", "user": .user, "event_id": uuid_v4()}
       command = to_string(.command) ?? ""
       if length(command) > 200 { command = slice!(command, 0, 199) + "…" }
@@ -145,7 +152,6 @@ transforms:
       . = {
         "labels": labels,
         "annotations": {"summary": summary, "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/" + runbook + ".md"},
-        "endsAt": ends_at,
       }
 
   # Several lines about one connection (address and source port) count once.
@@ -189,7 +195,6 @@ transforms:
           "summary": to_string(length(times)) + " failed SSH logins from " + string!(.addr) + " in " + to_string(window) + " s",
           "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/ssh-failed-logins.md",
         },
-        "endsAt": format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) + 300), format: "%+"),
       }
 
   # A long attack alerts once per window, not once per group.
@@ -230,7 +235,6 @@ transforms:
           "summary": to_string(length(times)) + " failed SSH logins from " + to_string(sources) + " addresses in " + to_string(window / 60) + " min",
           "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/ssh-failed-logins.md",
         },
-        "endsAt": format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) + 300), format: "%+"),
       }
 
   flood_once_per_window:
@@ -294,7 +298,10 @@ transforms:
     type: remap
     inputs: [event_alerts, burst_once_per_window, flood_once_per_window, port_alerts]
     source: |
-      . = {"labels": .labels, "annotations": .annotations, "endsAt": .endsAt}
+      payload = {"labels": .labels, "annotations": .annotations}
+      # Only states (open ports) carry an end time; see event_alerts.
+      if exists(.endsAt) { payload.endsAt = .endsAt }
+      . = payload
 
 sinks:
   to_alertmanager:

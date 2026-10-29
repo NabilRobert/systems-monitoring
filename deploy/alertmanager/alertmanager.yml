@@ -11,6 +11,8 @@
 # never committed (docs/runbook-deploy.md).
 
 global:
+  # Also the lifetime of a one-shot event: events are sent without an end
+  # time, so they end 5 minutes after Alertmanager receives them.
   resolve_timeout: 5m
 
 templates:

@@ -8,6 +8,7 @@ Addresses are documentation ranges (RFC 5737).
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -271,6 +272,49 @@ def test_app_down_pages_then_resolves(stack: Path):
         f.write(f"AppDown after stopping the app\t{took:.1f}\n")
     subprocess.run([*COMPOSE, "start", "demo-app"], check=True, cwd=ROOT, env=COMPOSE_ENV)
     wait_for("✅ Resolved: <b>AppDown</b>", timeout=240)
+
+
+def test_a_login_right_after_log_rotation_still_alerts(stack: Path):
+    """logrotate renames the log and creates a new one; sshd may write to it at once."""
+    log = OUT / "log" / "auth.log"
+    log.rename(OUT / "log" / "auth.log.1")
+    log.write_text(line("Accepted publickey for rotated from 203.0.113.21 port 3001 ssh2"))
+    written = time.time()
+    check(wait_for("SSH login: rotated (publickey) from 203.0.113.21"), written, silent=False)
+    # And the next line in the new file too.
+    written = append(line("Accepted publickey for rotated2 from 203.0.113.22 port 3002 ssh2"))
+    check(wait_for("SSH login: rotated2 (publickey) from 203.0.113.22"), written, silent=False)
+
+
+def _parse_go_time(text: str) -> datetime:
+    """Go prints up to 9 fractional digits; Python's parser takes at most 6."""
+    return datetime.fromisoformat(re.sub(r"(\.\d{6})\d+", r"\1", text))
+
+
+def test_a_login_during_an_alertmanager_outage_arrives_afterwards(stack: Path):
+    """Vector keeps the alert and retries; Alertmanager times it from when it arrives."""
+    subprocess.run([*COMPOSE, "stop", "alertmanager"], check=True, cwd=ROOT, env=COMPOSE_ENV)
+    append(line("Accepted publickey for outage from 203.0.113.31 port 3101 ssh2"))
+    time.sleep(20)
+    restarted = time.time()
+    subprocess.run([*COMPOSE, "start", "alertmanager"], check=True, cwd=ROOT, env=COMPOSE_ENV)
+    message = wait_for("SSH login: outage (publickey) from 203.0.113.31", timeout=120)
+    assert float(message["received_at"]) >= restarted  # pyright: ignore[reportArgumentType]
+    # The event carried no end time, so Alertmanager set one 5 minutes after
+    # it *received* it: an event buffered through a longer outage would not
+    # arrive already over (ADR-006).
+    alerts = json.loads(
+        subprocess.run(
+            [*COMPOSE, "exec", "-T", "alertmanager", "amtool", "alert", "query", "user=outage",
+             "--output=json", "--alertmanager.url=http://127.0.0.1:9093"],
+            check=True, cwd=ROOT, env=COMPOSE_ENV, capture_output=True, text=True,
+        ).stdout
+    )  # fmt: skip
+    [alert] = alerts
+    starts = _parse_go_time(alert["startsAt"])
+    ends = _parse_go_time(alert["endsAt"])
+    assert ends - starts == timedelta(minutes=5)
+    assert starts.timestamp() >= restarted - 2
 
 
 def test_old_lines_and_allowed_ports_never_alert(stack: Path):
