@@ -45,7 +45,7 @@ Follow one line: `Accepted publickey for deploy from 203.0.113.7 port 51522`.
 1. **sshd writes the line** to `/var/log/auth.log` on the server.
 2. **The container can see it:** `deploy/compose.yaml`, service `vector`,
    mounts `/var/log` read-only at `/host/log`.
-3. **Vector reads the new line:** `deploy/vector/vector.yaml`,
+3. **Vector reads the new line:** `deploy/vector/security.yaml`,
    `sources.auth_log`. It starts at the end of the file, so old lines
    never alert, and it follows the file through log rotation.
 4. **The line becomes an event:** `transforms.parse`. A regular
@@ -121,14 +121,14 @@ flowchart LR
    and Alertmanager sends ✅ Resolved.
 
 The host alerts work the same way, from the `host_*` numbers Vector
-pushes (`sources.host` and `sinks.to_victoriametrics` in `vector.yaml`).
+pushes (`deploy/vector/host-metrics.yaml`).
 
 ## Glossary
 
 | Term | Meaning | Where |
 |---|---|---|
 | **Alertmanager** | Prometheus's alert router: receives alerts, groups them, silences them, sends them to receivers | `deploy/alertmanager/` |
-| **Vector** | An open-source pipeline for logs and events (by Datadog). Here it does the detecting | `deploy/vector/vector.yaml` |
+| **Vector** | An open-source pipeline for logs and events (by Datadog). Here it does the detecting | `deploy/vector/security.yaml`, `host-metrics.yaml` |
 | **Source, transform, sink** | Vector's three kinds of component: where events come from, what changes them, where they go | `sources:`, `transforms:`, `sinks:` |
 | **VRL** | Vector Remap Language: the small language inside each `remap` transform | the `source: \|` blocks |
 | **Route** (Vector) | A transform that splits events by a condition | `by_kind` |
@@ -165,14 +165,14 @@ pushes (`sources.host` and `sinks.to_victoriametrics` in `vector.yaml`).
 |---|---|---|
 | Allow a new public port | `SECURITY_ALLOWED_PORTS` in `deploy/.env` (on the server) | `docker compose up -d vector` |
 | Make your own logins silent | `SECURITY_KNOWN_NETWORKS` in `deploy/.env` | `docker compose up -d vector` |
-| Change the burst or flood thresholds | `deploy/vector/vector.yaml`: `max_events` in `burst_groups` / `flood_groups` **and** `threshold` in `burst_alerts` / `flood_alerts` (keep them equal) | Update the tests in `deploy/vector/tests/rules.yaml` and the runbook |
-| Change a message's wording | The summary in the matching `*_alerts` transform | Update its test in `rules.yaml` and `e2e/test_e2e.py` |
+| Change the burst or flood thresholds | `deploy/vector/security.yaml`: `max_events` in `burst_groups` / `flood_groups` **and** `threshold` in `burst_alerts` / `flood_alerts` (keep them equal) | Update the tests in `deploy/vector/tests/` and the runbook |
+| Change a message's wording | The summary in the matching `*_alerts` transform | Update its test in `deploy/vector/tests/` and `e2e/test_e2e_1_security.py` |
 | Change how messages look | `deploy/alertmanager/templates/telegram.tmpl` | Run the e2e tests |
 | Change who gets what, or how loud | `route:` and `receivers:` in `deploy/alertmanager/alertmanager.yml` | Update `e2e/test_routes.py` |
-| Add a new rule | A branch in `parse` (if it's a new line shape) and a `*_alerts` transform in `vector.yaml`; a test in `rules.yaml`; a runbook in `docs/runbooks/` and a row in its README; an end-to-end test | `tests/test_runbooks.py` fails until the runbook exists |
+| Add a new rule | A branch in `parse` (if it's a new line shape) and a `*_alerts` transform in `security.yaml`; a test in `deploy/vector/tests/`; a runbook in `docs/runbooks/` and a row in its README; an end-to-end test | `tests/test_runbooks.py` fails until the runbook exists |
 | Probe a new app (Juku) | A target with an `app` label in `deploy/targets/apps.yml` on the server | VictoriaMetrics picks it up within a minute |
-| Change an uptime, disk, memory or SLO threshold | The rule in `deploy/vmalert/rules.yml` | Update its test in `deploy/vmalert/tests/rules_test.yml` and its runbook |
-| Add a metric alert | A rule with `severity`, `summary` and `runbook_url` in `rules.yml`; a test in `rules_test.yml`; a runbook and a row in the runbooks' README | `tests/test_runbooks.py` checks the runbook |
+| Change an uptime, disk, memory or SLO threshold | The rule in `deploy/vmalert/rules.yml` | Update its test in `deploy/vmalert/tests/` and its runbook |
+| Add a metric alert | A rule with `severity`, `summary` and `runbook_url` in `rules.yml`; a test in `deploy/vmalert/tests/`; a runbook and a row in the runbooks' README | `tests/test_runbooks.py` checks the runbook |
 | Silence alerts during maintenance | Nothing: `amtool silence add …` (in `docs/runbook-deploy.md`) | — |
 | Update an image | The tag and digest in `deploy/compose.yaml`, on a branch | Run all tests |
 
@@ -184,12 +184,13 @@ uv run ruff check . && uv run pyright && uv run pytest   # quick: runbook covera
 uv run pytest -m e2e e2e/                                # Docker: rules, routing, end to end
 ```
 
-- `e2e/test_vector_rules.py` runs `vector test` on `deploy/vector/tests/rules.yaml`:
+- `e2e/test_vector_rules.py` runs `vector test` on `deploy/vector/tests/`:
   one test per rule, named as a sentence.
 - `e2e/test_vmalert_rules.py` runs `vmalert-tool unittest` on
-  `deploy/vmalert/tests/rules_test.yml`: made-up series over time, and
+  `deploy/vmalert/tests/`: made-up series over time, and
   which alerts must and mustn't fire.
 - `e2e/test_routes.py` asks `amtool` where each kind of alert goes.
-- `e2e/test_e2e.py` starts the real compose file with the Telegram
-  stand-in, writes log lines and socket tables, and waits for each
+- `e2e/test_e2e_*.py` (security, metrics, then what must not alert;
+  helpers in `e2e/stack.py`) start the real compose file with the Telegram
+  stand-in, write log lines and socket tables, and wait for each
   message.
