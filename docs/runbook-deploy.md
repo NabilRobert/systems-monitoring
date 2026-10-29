@@ -222,6 +222,11 @@ always-on total becomes 368 MB of caps.
    (no domains or addresses).
 
 **Known limits** (in the runbooks too):
+- The Pitstop demo's `/api/health` answers "ok" without checking its
+  database (reported to the Pitstop project, 2026-10-29). The fix is on
+  Pitstop's branch `fix/health-db-check` (a 503 when the database doesn't
+  answer within 3 s). Until it's merged and the demo redeployed, a dead
+  demo database won't page; the probe only sees the API process.
 - Everything runs on the server it watches: if the whole server goes
   down, nothing here can say so. An outside check needs an account
   (slice plan, later).

@@ -4,6 +4,9 @@
 - targets: ["https://<mcp-backbone-domain>/healthz"]
   labels:
     app: mcp-backbone
+# Known gap until Pitstop's fix/health-db-check is merged and redeployed:
+# this endpoint doesn't check the demo's database, so a database outage
+# there won't page.
 - targets: ["https://<pitstop-demo-domain>/api/health"]
   labels:
     app: pitstop-demo
