@@ -13,7 +13,8 @@ right now, and who gets told when it isn't". Everything runs within hard
 memory caps, on $0 of tooling.
 
 **Status:** slices 1 (security alerts) and 3 (metrics, uptime probes,
-host health, availability SLOs) are built and tested locally in Docker.
+host health, availability SLOs) and the version drift check are built and
+tested locally in Docker.
 Nothing is deployed yet; the [deploy runbook](docs/runbook-deploy.md) is
 ready. The rest is planned in the [slice plan](docs/planning/slice-plan.md).
 
@@ -85,18 +86,18 @@ that kept the whole always-on stack at **368 MB** of memory caps.
 
 | Check | What it proves |
 |---|---|
-| 32 rule tests (`vector test`) | Each security rule on real sshd, sudo and `/proc/net/tcp` line shapes: what alerts, at what severity, with what text, and what stays quiet; crafted user names can't plant a false address |
-| 19 rule tests (`vmalert-tool unittest`) | Each uptime, host and SLO rule on made-up series over time (up to 3 days): when it fires, and when it must not, including right after a deploy |
-| 40 mutations of the rules | 19 of the security rules and 19 of the metric rules (an off-by-one threshold, a missed log format, a dropped "enough probes" floor, `increase` instead of `increase_prometheus`…) and 2 of the runbook links: each makes a test fail |
+| 53 rule tests (`vector test`) | Each security rule on real sshd, sudo and `/proc/net/tcp` line shapes: what alerts, at what severity, with what text, and what stays quiet; crafted user names can't plant a false address. The version check on behind, in date, API errors, version missing and unknown commit |
+| 31 rule tests (`vmalert-tool unittest`) | Each uptime, host, SLO and version rule on made-up series over time (up to 3 days): when it fires, and when it must not, including right after a deploy |
+| 77 mutations of the rules | 19 of the security rules, 19 of the metric rules, 37 of the version check (an error read as "in date", a page instead of a ticket, a shorter grace period) and 2 of the runbook links: each makes a test fail |
 | 7 routing tests | `amtool` from the pinned image: the config is valid, and each kind of alert reaches the right receiver |
-| 15 end-to-end tests, in Docker | The **production** compose file (images, hardening, caps, routing, health checks) with stand-ins for Telegram's API and for an app: each security alert from a synthetic log line or socket table to a delivered message, within 60 s; host metrics and probe results reaching VictoriaMetrics; the app stopped → AppDown → restarted → Resolved; a login straight after log rotation; a login during an Alertmanager outage, delivered afterwards; no alert that no test caused |
+| 16 end-to-end tests, in Docker | The **production** compose file (images, hardening, caps, routing, health checks) with stand-ins for Telegram's API and for an app: each security alert from a synthetic log line or socket table to a delivered message, within 60 s; host metrics, probe results and version checks reaching VictoriaMetrics; the app stopped → AppDown → restarted → Resolved; a login straight after log rotation; a login during an Alertmanager outage, delivered afterwards; no alert that no test caused |
 | 6 quick tests | Every alert in both rule sets links a runbook that exists and is indexed; every relative link in the docs resolves |
 
 Measured locally (Docker Desktop, arm64), peaks during the end-to-end run:
 
 | Container | Peak memory | Cap |
 |---|---|---|
-| `vector` | 95.5 MiB (74–79 steady) | 128 MB |
+| `vector` | 107 MiB | 128 MB |
 | `victoriametrics` | 106 MiB (fills its cache on purpose) | 128 MB |
 | `alertmanager` | 19.8 MiB | 48 MB |
 | `blackbox` | 16.5 MiB | 32 MB |
@@ -133,8 +134,8 @@ uv run pytest -m e2e e2e/                                # Docker, about 12 minu
 
 | Path | What |
 |---|---|
-| `deploy/vector/` | The six security rules and the host metrics, with unit tests |
-| `deploy/vmalert/` | Uptime, host and SLO alert rules, with unit tests |
+| `deploy/vector/` | The six security rules, the host metrics and the version drift check, with unit tests |
+| `deploy/vmalert/` | Uptime, host, SLO and version alert rules, with unit tests |
 | `deploy/victoriametrics/`, `deploy/blackbox/`, `deploy/targets/` | What is scraped and probed (the real targets stay on the server) |
 | `deploy/alertmanager/` | Routing, receivers, the inhibit rule and the Telegram message template |
 | `deploy/compose.yaml`, `deploy/.env.example` | The stack and its settings |
@@ -144,7 +145,7 @@ uv run pytest -m e2e e2e/                                # Docker, about 12 minu
 | `docs/adr/` | The decisions, one per file, with the options considered; Juku's draft SLOs (ADR-008) |
 | `docs/planning/` | Problem, requirements, slice plan, spike results |
 | `docs/runbooks/` | One runbook per alert |
-| `docs/runbook-deploy.md` | Deploying slice 1, step by step |
+| `docs/runbook-deploy.md` | Deploying it, step by step |
 
 ## Licence
 

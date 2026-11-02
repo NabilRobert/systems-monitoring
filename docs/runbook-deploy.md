@@ -1,4 +1,4 @@
-# Deploy runbook: security alerts (slice 1), metrics and probes (slice 3)
+# Deploy runbook: security alerts (slice 1), metrics and probes (slice 3), version drift
 
 For Arthur, on the shared server. About an hour, most of it step 7.
 Nothing in this repo deploys itself; every step is run by hand.
@@ -221,6 +221,51 @@ always-on total becomes 368 MB of caps.
    and send the session the five memory numbers and the AppDown delay
    (no domains or addresses).
 
+## 10. Version drift check
+
+Adds no container: Vector does it. It reads each app's reported version every
+15 minutes and asks GitHub how far `main` has moved past it, over the server's
+outbound HTTPS. No token is involved. Details: [the runbook](runbooks/version-drift.md).
+
+1. **Update:** `git pull` in `~/systems-monitoring`.
+2. **Targets:** the domain stays on the server, never in git.
+
+   ```bash
+   cp targets/versions.yml.example targets/versions.yml
+   ```
+
+   Fill in the domain. Only list apps whose health answer has a commit in
+   `version`; today that's MCP-backbone.
+3. **Check** (the version should be 12 hex digits, perhaps with `-dirty`):
+
+   ```bash
+   curl -s https://<mcp-backbone-domain>/healthz
+   ```
+
+   ```bash
+   docker compose run --rm --no-deps vector validate --skip-healthchecks /etc/vector/vector.yaml /etc/vector/security.yaml /etc/vector/host-metrics.yaml /etc/vector/version-drift.yaml
+   ```
+
+   Expect `Validated`.
+4. **Start:** `docker compose up -d` recreates `vector`, which now also reads
+   `targets/`, read-only. The other two read changed config files, which
+   `up` doesn't notice, so restart them:
+
+   ```bash
+   docker compose restart vmalert victoriametrics
+   ```
+
+5. **Look:** in vmui (step 9's tunnel), a minute later, query
+   `last_over_time(app_version_commits_behind[1h])`: one series for
+   `mcp-backbone`. If the live server is behind, the number is how far.
+   `last_over_time(app_version_check_unknown[1h])` should be empty.
+6. **Expect** a 🟡 **LiveVersionBehind** about a day later if the app is still
+   behind then, and nothing if it's in date. A deploy clears it at the next
+   check.
+7. **Record** `docker stats --no-stream --format '{{.Name}} {{.MemUsage}}'`
+   and send the session the `vector` number and the commits-behind value (no
+   domains or addresses).
+
 **Known limits** (in the runbooks too):
 - Everything runs on the server it watches: if the whole server goes
   down, nothing here can say so. An outside check needs an account
@@ -250,7 +295,7 @@ docker compose down
 ```
 
 This stops and removes every container. What stays: the files you
-created (`deploy/.env`, `deploy/targets/apps.yml`, `deploy/secrets/`;
+created (`deploy/.env`, `deploy/targets/*.yml`, `deploy/secrets/`;
 delete them if you're removing it for good) and the stored metrics and
 Alertmanager state (`docker compose down -v` removes those too). To revoke the bot, send `/revoke`
 to @BotFather.
