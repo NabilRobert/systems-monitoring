@@ -35,7 +35,7 @@ def test_the_rules_define_all_six_alerts():
 
 def test_every_metric_alert_links_a_runbook():
     alerts = METRIC_RULES.split("- alert: ")[1:]
-    assert len(alerts) == len(METRIC_ALERT_NAMES) == 12
+    assert len(alerts) == len(METRIC_ALERT_NAMES) == 15
     unlinked = [a.split()[0] for a in alerts if "runbook_url: https://" not in a]
     assert unlinked == []
 

@@ -30,12 +30,14 @@ services:
     restart: unless-stopped
 
   vector:
-    # The six security rules, and host and container metrics (ADR-005, 006).
+    # The six security rules, host and container metrics, and the version
+    # drift check (ADR-005, 006, 013).
     image: timberio/vector:0.59.0-alpine@sha256:0e36bc2a290039e9b6a5e92f04bd2f133223506f72d09682c1df16c015172b7a
     command:
       - --config=/etc/vector/vector.yaml
       - --config=/etc/vector/security.yaml
       - --config=/etc/vector/host-metrics.yaml
+      - --config=/etc/vector/version-drift.yaml
     user: "65534:65534"
     group_add: ["${AUTH_LOG_GID:-4}"]
     # Read-only views of the host: its logs, and its /proc and /sys. The
@@ -44,6 +46,7 @@ services:
     # host's network nor any privilege.
     volumes:
       - ./vector:/etc/vector:ro
+      - ./targets:/etc/vector-targets:ro
       - /var/log:/host/log:ro
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
@@ -52,6 +55,7 @@ services:
       SECURITY_PROC_NET: /host/proc/1/net
       PROCFS_ROOT: /host/proc
       SYSFS_ROOT: /host/sys
+      GITHUB_API_URL: https://api.github.com
     read_only: true
     # Vector's checkpoints: lost on restart, so it starts at the log's end.
     tmpfs: ["/var/lib/vector:size=4m,uid=65534,gid=65534"]
@@ -59,7 +63,8 @@ services:
     security_opt: [no-new-privileges:true]
     # Measured: 66 MiB idle with security rules only; 74-79 MiB steady with
     # host metrics too, peaking at 95 MiB while 200 failed logins arrived at
-    # once (end-to-end test). 96 MB was too tight.
+    # once (end-to-end test). 96 MB was too tight. With the version check:
+    # peak 107 MiB, and it stays near that after the burst.
     mem_limit: 128m
     pids_limit: 64
     healthcheck:

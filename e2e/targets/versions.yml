@@ -1,0 +1,14 @@
+# The e2e version check: the stand-in app answers both the health requests
+# and, under repos/, GitHub's compare requests (GITHUB_API_URL points at it).
+- app: demo-behind
+  version_url: http://demo-app:8080/version-behind
+  repo: acme/app
+- app: demo-current
+  version_url: http://demo-app:8080/version-current
+  repo: acme/app
+- app: demo-no-version
+  version_url: http://demo-app:8080/health
+  repo: acme/app
+- app: demo-unreachable
+  version_url: http://demo-app:9/health
+  repo: acme/app

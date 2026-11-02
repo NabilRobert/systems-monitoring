@@ -18,6 +18,7 @@ One per alert. Each alert's message links its runbook. A test
 | `HostMemoryLow`, `OutOfMemoryKill` | page | [memory.md](memory.md) |
 | `MonitoringPipelineSilent` | page | [monitoring-pipeline-silent.md](monitoring-pipeline-silent.md) |
 | `AvailabilityFastBurn`, `AvailabilitySlowBurn`, `AvailabilityBudgetTrend` | page, page, ticket | [availability-budget.md](availability-budget.md) |
+| `LiveVersionBehind`, `LiveVersionUnknown`, `VersionCheckNotRunning` | ticket | [version-drift.md](version-drift.md) |
 
 **Page** buzzes the phone; **ticket** arrives silently. Every runbook
 follows the same order: what it means, is it expected, what to check,

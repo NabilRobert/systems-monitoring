@@ -24,11 +24,33 @@ def test_probes_of_a_healthy_app_succeed(stack: Path):
     value = result["value"]
     assert isinstance(value, list)
     assert value[1] == "1"  # pyright: ignore[reportUnknownMemberType]
+    # versions.yml sits beside apps.yml, and it isn't a list of probe targets.
+    assert "skipping file" not in compose("logs", "victoriametrics")
 
 
 def test_vmalert_records_the_slo_error_ratios(stack: Path):
     # Proves vmalert is running and writing its recording rules back.
     assert wait_for_metric('app:probe_error:ratio_5m{app="demo-app"}', timeout=120)
+
+
+def test_version_check_reports_what_each_app_is_running(stack: Path):
+    # Samples arrive every 15 minutes, so they're older than an instant query
+    # looks back: read the last sample of the hour.
+    def last_sample(selector: str) -> str:
+        [result] = wait_for_metric(f"last_over_time({selector}[1h])", timeout=120)
+        value = result["value"]
+        assert isinstance(value, list)
+        return str(value[1])  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]
+
+    assert last_sample('app_version_commits_behind{app="demo-behind"}') == "3"
+    assert last_sample('app_version_commits_behind{app="demo-current"}') == "0"
+    no_version = 'app_version_check_unknown{app="demo-no-version",reason="version_missing"}'
+    assert last_sample(no_version) == "1"
+    unreachable = 'app_version_check_unknown{app="demo-unreachable",reason="app_unreachable"}'
+    assert last_sample(unreachable) == "1"
+    # Unknown is never reported as a commit count, least of all 0.
+    for app in ("demo-no-version", "demo-unreachable"):
+        assert query_metrics(f'app_version_commits_behind{{app="{app}"}}') == []
 
 
 def test_app_down_pages_then_resolves(stack: Path):

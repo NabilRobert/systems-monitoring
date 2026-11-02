@@ -1,0 +1,147 @@
+# Is each live app running what's on GitHub `main`? (docs/adr, ADR-013)
+#
+# Every 15 minutes, for each entry in targets/versions.yml: read the version
+# the app reports, ask GitHub how far `main` has moved past it, and push the
+# answer to VictoriaMetrics. Alerts and the grace period are in
+# vmalert/rules.yml. Loaded with vector.yaml and host-metrics.yaml, whose
+# sink carries the metrics.
+#
+# Result, one metric per check:
+# - app_version_commits_behind{app}: GitHub gave an answer; 0 is in date;
+# - app_version_check_unknown{app,reason}: it couldn't be worked out.
+# Nothing here defaults to "in date": commits_behind is set only from an
+# integer GitHub returned.
+#
+# The two read_ stages make the HTTP calls; the stages between them are pure,
+# so `vector test` covers them without a network (tests/version-drift.yaml).
+
+sources:
+  # GitHub allows 60 unauthenticated calls an hour per address, and each
+  # check of an app costs one, so 15 minutes leaves room for about 15 apps.
+  version_targets:
+    type: exec
+    mode: scheduled
+    command: [cat, /etc/vector-targets/versions.yml]
+    scheduled:
+      exec_interval_secs: 900
+    include_stderr: false
+    # The whole file is one event, not one per line.
+    framing:
+      method: bytes
+
+transforms:
+  # One event per app. A broken file stops every check, which
+  # VersionCheckNotRunning reports.
+  version_apps:
+    type: remap
+    inputs: [version_targets]
+    drop_on_abort: true
+    source: |
+      apps, err = parse_yaml(.message)
+      if err != null || !is_array(apps) {
+        log("targets/versions.yml is not a list of apps", level: "error", rate_limit_secs: 0)
+        abort
+      }
+      . = apps
+
+  # http_request has no timeout setting: a hung endpoint fails after about
+  # 44 s (10 s, 3 retries; measured). A non-2xx answer isn't an error: a
+  # failing app can still report its version.
+  version_read_live:
+    type: remap
+    inputs: [version_apps]
+    source: |
+      response, err = http_request(string(.version_url) ?? "")
+      if err != null {
+        .reason = "app_unreachable"
+      } else {
+        .live_response = response
+      }
+
+  # Only a commit hash leaves this stage, so nothing the app says can reach
+  # the GitHub URL. "-dirty" marks local edits on top of that commit
+  # (MCP-backbone's app/version.py), so the commit is still the comparison.
+  version_parse_live:
+    type: remap
+    inputs: [version_read_live]
+    source: |
+      if !exists(.reason) {
+        live = parse_json(.live_response) ?? null
+        version = if is_object(live) { live.version } else { null }
+        matched = parse_regex(string(version) ?? "", r'^(?P<commit>[0-9a-f]{7,40})(-dirty)?$') ?? null
+        if matched == null {
+          .reason = "version_missing"
+        } else {
+          .commit = matched.commit
+        }
+      }
+      del(.live_response)
+
+  # GitHub rejects a request with no User-Agent. Its answer is about 150 KB
+  # (every changed file) and can't be trimmed: per_page limits commits only.
+  version_read_github:
+    type: remap
+    inputs: [version_parse_live]
+    source: |
+      if exists(.commit) {
+        api = get_env_var("GITHUB_API_URL") ?? "https://api.github.com"
+        url = api + "/repos/" + (string(.repo) ?? "") + "/compare/" + string!(.commit) + "...main"
+        headers = {"User-Agent": "systems-monitoring", "Accept": "application/vnd.github+json"}
+        response, err = http_request(url, headers: headers)
+        if err != null {
+          .reason = "github_unreachable"
+        } else {
+          .github_response = response
+        }
+      }
+
+  # `ahead_by` counts commits on main that the live build lacks, so it's
+  # right even when live has commits of its own ("diverged"), and it's 0 when
+  # live is ahead of main. A rate-limit or server-error body has no ahead_by.
+  version_judge:
+    type: remap
+    inputs: [version_read_github]
+    source: |
+      if !exists(.reason) {
+        answer = parse_json(.github_response) ?? null
+        ahead_by = if is_object(answer) { answer.ahead_by } else { null }
+        message = if is_object(answer) { answer.message } else { null }
+        if is_integer(ahead_by) {
+          .commits_behind = ahead_by
+        } else if message == "Not Found" {
+          .reason = "unknown_commit"
+        } else {
+          .reason = "github_error"
+        }
+      }
+      del(.github_response)
+      .is_unknown = 1
+
+  version_results:
+    type: route
+    inputs: [version_judge]
+    reroute_unmatched: false
+    route:
+      known: exists(.commits_behind)
+      unknown: exists(.reason)
+
+  version_known_metrics:
+    type: log_to_metric
+    inputs: [version_results.known]
+    metrics:
+      - type: gauge
+        field: commits_behind
+        name: app_version_commits_behind
+        tags:
+          app: "{{ app }}"
+
+  version_unknown_metrics:
+    type: log_to_metric
+    inputs: [version_results.unknown]
+    metrics:
+      - type: gauge
+        field: is_unknown
+        name: app_version_check_unknown
+        tags:
+          app: "{{ app }}"
+          reason: "{{ reason }}"

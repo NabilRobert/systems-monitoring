@@ -1,0 +1,191 @@
+# Unit tests for the version-drift alerts in ../rules.yml. One sample per
+# check, every 15 minutes, so 96 samples are a day. Runs like the others
+# (e2e/test_vmalert_rules.py).
+
+rule_files:
+  - ../rules.yml
+evaluation_interval: 5m
+
+tests:
+
+  # Behind from the first check: nothing during the grace period, a silent
+  # ticket after it.
+  - interval: 15m
+    input_series:
+      - series: 'app_version_commits_behind{app="mcp-backbone"}'
+        values: "13x120"
+    alert_rule_test:
+      - eval_time: 22h
+        alertname: LiveVersionBehind
+        exp_alerts: []
+      - eval_time: 24h
+        alertname: LiveVersionBehind
+        exp_alerts:
+          - exp_labels: {app: mcp-backbone, severity: ticket}
+            exp_annotations:
+              summary: "mcp-backbone has been behind GitHub main for a day, by at least 13 commits: it needs a deploy"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/version-drift.md
+
+  # In date: never.
+  - interval: 15m
+    input_series:
+      - series: 'app_version_commits_behind{app="mcp-backbone"}'
+        values: "0x120"
+    alert_rule_test:
+      - eval_time: 30h
+        alertname: LiveVersionBehind
+        exp_alerts: []
+
+  # A merge at 12 h, deployed at 20 h (a routine deploy): never alerts.
+  - interval: 15m
+    input_series:
+      - series: 'app_version_commits_behind{app="mcp-backbone"}'
+        values: "0x48 2x32 0x64"
+    alert_rule_test:
+      - eval_time: 19h
+        alertname: LiveVersionBehind
+        exp_alerts: []
+      - eval_time: 36h
+        alertname: LiveVersionBehind
+        exp_alerts: []
+
+  # The grace period runs from the merge, not from when monitoring started.
+  - interval: 15m
+    input_series:
+      - series: 'app_version_commits_behind{app="mcp-backbone"}'
+        values: "0x48 2x120"
+    alert_rule_test:
+      - eval_time: 35h
+        alertname: LiveVersionBehind
+        exp_alerts: []
+      - eval_time: 37h
+        alertname: LiveVersionBehind
+        exp_alerts:
+          - exp_labels: {app: mcp-backbone, severity: ticket}
+            exp_annotations:
+              summary: "mcp-backbone has been behind GitHub main for a day, by at least 2 commits: it needs a deploy"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/version-drift.md
+
+  # A deploy ends it at the next check.
+  - interval: 15m
+    input_series:
+      - series: 'app_version_commits_behind{app="mcp-backbone"}'
+        values: "2x100 0x20"
+    alert_rule_test:
+      - eval_time: 24h
+        alertname: LiveVersionBehind
+        exp_alerts:
+          - exp_labels: {app: mcp-backbone, severity: ticket}
+            exp_annotations:
+              summary: "mcp-backbone has been behind GitHub main for a day, by at least 2 commits: it needs a deploy"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/version-drift.md
+      - eval_time: 25h45m
+        alertname: LiveVersionBehind
+        exp_alerts: []
+
+  # A GitHub outage in the middle of the wait doesn't restart it.
+  - interval: 15m
+    input_series:
+      - series: 'app_version_commits_behind{app="mcp-backbone"}'
+        values: "2x40 _x20 2x60"
+    alert_rule_test:
+      - eval_time: 24h
+        alertname: LiveVersionBehind
+        exp_alerts:
+          - exp_labels: {app: mcp-backbone, severity: ticket}
+            exp_annotations:
+              summary: "mcp-backbone has been behind GitHub main for a day, by at least 2 commits: it needs a deploy"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/version-drift.md
+
+  # A GitHub outage is unknown, not behind, and a ticket only after 6 hours.
+  - interval: 15m
+    input_series:
+      - series: 'app_version_check_unknown{app="mcp-backbone",reason="github_unreachable"}'
+        values: "1x40"
+    alert_rule_test:
+      - eval_time: 5h
+        alertname: LiveVersionUnknown
+        exp_alerts: []
+      - eval_time: 7h
+        alertname: LiveVersionUnknown
+        exp_alerts:
+          - exp_labels: {app: mcp-backbone, reason: github_unreachable, severity: ticket}
+            exp_annotations:
+              summary: "Can't tell which version mcp-backbone is running (github_unreachable): every check failed for 6 hours"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/version-drift.md
+      - eval_time: 7h
+        alertname: LiveVersionBehind
+        exp_alerts: []
+
+  # One good check among the failures clears it.
+  - interval: 15m
+    input_series:
+      - series: 'app_version_check_unknown{app="mcp-backbone",reason="github_error"}'
+        values: "1x20 _ 1x20"
+      - series: 'app_version_commits_behind{app="mcp-backbone"}'
+        values: "_x20 0 _x20"
+    alert_rule_test:
+      - eval_time: 9h
+        alertname: LiveVersionUnknown
+        exp_alerts: []
+
+  # Unknown for one app says nothing about another.
+  - interval: 15m
+    input_series:
+      - series: 'app_version_check_unknown{app="pitstop-demo",reason="version_missing"}'
+        values: "1x40"
+      - series: 'app_version_commits_behind{app="mcp-backbone"}'
+        values: "0x40"
+    alert_rule_test:
+      - eval_time: 7h
+        alertname: LiveVersionUnknown
+        exp_alerts:
+          - exp_labels: {app: pitstop-demo, reason: version_missing, severity: ticket}
+            exp_annotations:
+              summary: "Can't tell which version pitstop-demo is running (version_missing): every check failed for 6 hours"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/version-drift.md
+
+  # No result of either kind for an hour: the check isn't running.
+  - interval: 15m
+    input_series:
+      - series: 'app_version_commits_behind{app="mcp-backbone"}'
+        values: "0x4 _x20"
+      - series: 'host_load1'
+        values: "1x24"
+    alert_rule_test:
+      - eval_time: 1h
+        alertname: VersionCheckNotRunning
+        exp_alerts: []
+      - eval_time: 2h15m
+        alertname: VersionCheckNotRunning
+        exp_alerts:
+          - exp_labels: {severity: ticket}
+            exp_annotations:
+              summary: "The version drift check has reported nothing for an hour: check targets/versions.yml"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/version-drift.md
+
+  # Unknown results still prove the check is running.
+  - interval: 15m
+    input_series:
+      - series: 'app_version_check_unknown{app="mcp-backbone",reason="github_error"}'
+        values: "1x24"
+    alert_rule_test:
+      - eval_time: 3h
+        alertname: VersionCheckNotRunning
+        exp_alerts: []
+
+  # Checks 45 minutes apart (a Vector restart, slow targets) are still running.
+  - interval: 15m
+    input_series:
+      - series: 'app_version_commits_behind{app="mcp-backbone"}'
+        values: "0 _ _ 0 _ _ 0 _ _ 0 _ _ 0"
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: VersionCheckNotRunning
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: VersionCheckNotRunning
+        exp_alerts: []
+      - eval_time: 2h40m
+        alertname: VersionCheckNotRunning
+        exp_alerts: []
