@@ -38,6 +38,6 @@ def test_every_alert_rule_test_passes():
     )  # fmt: skip
     output = result.stdout + result.stderr
     assert result.returncode == 0, output
-    # One "Unit Testing: <file>" line per test file: both must have run.
-    assert output.count("Unit Testing:") == 2, output
+    # One "Unit Testing: <file>" line per test file: all must have run.
+    assert output.count("Unit Testing:") == 3, output
     assert "SUCCESS" in output, output

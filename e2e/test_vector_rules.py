@@ -16,7 +16,8 @@ assert _image is not None, "deploy/compose.yaml has no timberio/vector image lin
 VECTOR_IMAGE: str = _image.group(1)
 
 # The pipelines as compose loads them, then every test file.
-CONFIGS = [f"/etc/vector/{name}" for name in ("vector.yaml", "security.yaml", "host-metrics.yaml")]
+CONFIG_NAMES = ("vector.yaml", "security.yaml", "host-metrics.yaml", "version-drift.yaml")
+CONFIGS = [f"/etc/vector/{name}" for name in CONFIG_NAMES]
 TEST_FILES = [
     f"/etc/vector/tests/{path.name}" for path in sorted((VECTOR_DIR / "tests").glob("*.yaml"))
 ]
@@ -44,5 +45,5 @@ def test_every_vector_rule_test_passes():
     assert result.returncode == 0, output
     # One line per test, "test <name> ... passed" (names may contain "failed").
     results = [line for line in output.splitlines() if line.startswith("test ")]
-    assert len(results) >= 28, output
+    assert len(results) >= 52, output
     assert all(line.endswith("... passed") for line in results), output

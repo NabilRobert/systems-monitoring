@@ -1,0 +1,294 @@
+# The version-drift decisions (../version-drift.yaml), from the raw answers
+# of the app and of GitHub. The two read_ stages need a network, so they are
+# covered end to end in e2e/test_e2e_2_metrics.py, as are the metrics' values,
+# which VRL can't read.
+
+tests:
+  - name: a commit hash is taken from the version field
+    inputs:
+      - insert_at: version_parse_live
+        type: log
+        log_fields:
+          app: mcp-backbone
+          live_response: '{"status":"ok","database":"ok","version":"da6758c92454"}'
+    outputs:
+      - extract_from: version_parse_live
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.commit, "da6758c92454")
+              assert!(!exists(.reason))
+              assert!(!exists(.live_response))
+
+  - name: a dirty build is compared by its commit
+    inputs:
+      - insert_at: version_parse_live
+        type: log
+        log_fields:
+          live_response: '{"version":"da6758c92454-dirty"}'
+    outputs:
+      - extract_from: version_parse_live
+        conditions:
+          - type: vrl
+            source: assert_eq!(.commit, "da6758c92454")
+
+  - name: a failing app that still reports its version is checked
+    inputs:
+      - insert_at: version_parse_live
+        type: log
+        log_fields:
+          live_response: '{"status":"unhealthy","database":"unreachable","version":"da6758c92454"}'
+    outputs:
+      - extract_from: version_parse_live
+        conditions:
+          - type: vrl
+            source: assert_eq!(.commit, "da6758c92454")
+
+  - name: a health answer with no version field is version missing
+    inputs:
+      - insert_at: version_parse_live
+        type: log
+        log_fields:
+          live_response: '{"status":"ok"}'
+    outputs:
+      - extract_from: version_parse_live
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "version_missing")
+              assert!(!exists(.commit))
+
+  - name: the app's own placeholder is version missing
+    inputs:
+      - insert_at: version_parse_live
+        type: log
+        log_fields:
+          live_response: '{"version":"unknown"}'
+    outputs:
+      - extract_from: version_parse_live
+        conditions:
+          - type: vrl
+            source: assert_eq!(.reason, "version_missing")
+
+  - name: a health answer that isn't json is version missing
+    inputs:
+      - insert_at: version_parse_live
+        type: log
+        log_fields:
+          live_response: ok
+    outputs:
+      - extract_from: version_parse_live
+        conditions:
+          - type: vrl
+            source: assert_eq!(.reason, "version_missing")
+
+  - name: a health answer that is a json list is version missing
+    inputs:
+      - insert_at: version_parse_live
+        type: log
+        log_fields:
+          live_response: '["da6758c92454"]'
+    outputs:
+      - extract_from: version_parse_live
+        conditions:
+          - type: vrl
+            source: assert_eq!(.reason, "version_missing")
+
+  - name: a tagged build's description is version missing
+    inputs:
+      - insert_at: version_parse_live
+        type: log
+        log_fields:
+          live_response: '{"version":"v1.0-3-gda6758c92454"}'
+    outputs:
+      - extract_from: version_parse_live
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "version_missing")
+              assert!(!exists(.commit))
+
+  - name: a version that isn't a hash can't reach the github url
+    inputs:
+      - insert_at: version_parse_live
+        type: log
+        log_fields:
+          live_response: '{"version":"da6758c92454/../../other-repo"}'
+    outputs:
+      - extract_from: version_parse_live
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "version_missing")
+              assert!(!exists(.commit))
+
+  - name: an unreachable app stays unreachable
+    inputs:
+      - insert_at: version_parse_live
+        type: log
+        log_fields:
+          reason: app_unreachable
+    outputs:
+      - extract_from: version_parse_live
+        conditions:
+          - type: vrl
+            source: assert_eq!(.reason, "app_unreachable")
+
+  - name: main ahead of the live build is behind
+    inputs:
+      - insert_at: version_judge
+        type: log
+        log_fields:
+          app: mcp-backbone
+          github_response: '{"status":"ahead","ahead_by":13,"behind_by":0}'
+    outputs:
+      - extract_from: version_judge
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.commits_behind, 13)
+              assert!(!exists(.reason))
+              assert!(!exists(.github_response))
+
+  - name: main equal to the live build is in date
+    inputs:
+      - insert_at: version_judge
+        type: log
+        log_fields:
+          github_response: '{"status":"identical","ahead_by":0,"behind_by":0}'
+    outputs:
+      - extract_from: version_judge
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.commits_behind, 0)
+              assert!(!exists(.reason))
+
+  - name: a live build ahead of main is not behind
+    inputs:
+      - insert_at: version_judge
+        type: log
+        log_fields:
+          github_response: '{"status":"behind","ahead_by":0,"behind_by":2}'
+    outputs:
+      - extract_from: version_judge
+        conditions:
+          - type: vrl
+            source: assert_eq!(.commits_behind, 0)
+
+  - name: a diverged live build counts the commits it lacks
+    inputs:
+      - insert_at: version_judge
+        type: log
+        log_fields:
+          github_response: '{"status":"diverged","ahead_by":3,"behind_by":1}'
+    outputs:
+      - extract_from: version_judge
+        conditions:
+          - type: vrl
+            source: assert_eq!(.commits_behind, 3)
+
+  - name: a commit github doesn't know is unknown, not in date
+    inputs:
+      - insert_at: version_judge
+        type: log
+        log_fields:
+          github_response: '{"message":"Not Found","status":"404"}'
+    outputs:
+      - extract_from: version_judge
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "unknown_commit")
+              assert!(!exists(.commits_behind))
+
+  - name: a rate limit answer is unknown, not in date
+    inputs:
+      - insert_at: version_judge
+        type: log
+        log_fields:
+          github_response: '{"message":"API rate limit exceeded for 192.0.2.1.","status":"403"}'
+    outputs:
+      - extract_from: version_judge
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "github_error")
+              assert!(!exists(.commits_behind))
+
+  - name: a github error page that isn't json is unknown, not in date
+    inputs:
+      - insert_at: version_judge
+        type: log
+        log_fields:
+          github_response: <html>Bad gateway</html>
+    outputs:
+      - extract_from: version_judge
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "github_error")
+              assert!(!exists(.commits_behind))
+
+  - name: a github answer with a non-integer count is unknown, not in date
+    inputs:
+      - insert_at: version_judge
+        type: log
+        log_fields:
+          github_response: '{"ahead_by":"0"}'
+    outputs:
+      - extract_from: version_judge
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "github_error")
+              assert!(!exists(.commits_behind))
+
+  - name: an unreachable github stays unknown
+    inputs:
+      - insert_at: version_judge
+        type: log
+        log_fields:
+          reason: github_unreachable
+    outputs:
+      - extract_from: version_judge
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.reason, "github_unreachable")
+              assert!(!exists(.commits_behind))
+
+  - name: a known result becomes the commits-behind metric
+    inputs:
+      - insert_at: version_results
+        type: log
+        log_fields:
+          app: mcp-backbone
+          commits_behind: 13
+          is_unknown: 1
+    outputs:
+      - extract_from: version_known_metrics
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.name, "app_version_commits_behind")
+              assert_eq!(.tags.app, "mcp-backbone")
+              assert_eq!(.type, "gauge")
+
+  - name: an unknown result becomes the unknown metric with its reason
+    inputs:
+      - insert_at: version_results
+        type: log
+        log_fields:
+          app: mcp-backbone
+          reason: github_error
+          is_unknown: 1
+    outputs:
+      - extract_from: version_unknown_metrics
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.name, "app_version_check_unknown")
+              assert_eq!(.tags.app, "mcp-backbone")
+              assert_eq!(.tags.reason, "github_error")
+              assert_eq!(.type, "gauge")

@@ -5,7 +5,7 @@ Part of the [architecture decisions](README.md).
 | Container | Cap | Slice |
 |---|---|---|
 | `alertmanager` | 48 MB | 1 |
-| `vector` (security detection; host metrics from slice 3) | 128 MB | 1 |
+| `vector` (security detection; host metrics from slice 3; the version check, ADR-013) | 128 MB | 1 |
 | `victoriametrics` | 128 MB | 3 |
 | `vmalert` | 32 MB | 3 |
 | `blackbox` | 32 MB | 3 |
@@ -15,7 +15,7 @@ Part of the [architecture decisions](README.md).
 
 *Measured in slice 3's end-to-end run (Docker Desktop, arm64), peak:*
 Vector 95.5 MiB (74–79 steady; it was capped at 96 MB, too tight, so
-raised to 128), VictoriaMetrics 106 MiB (it fills its cache allowance on
+raised to 128; 107 MiB with the version check, ADR-013), VictoriaMetrics 106 MiB (it fills its cache allowance on
 purpose), Alertmanager 19.8, blackbox 16.5, vmalert 14.9.
 
 **Open for slice 5:** with `slo-check` the peak is 416 MB. Either the

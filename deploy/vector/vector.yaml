@@ -1,5 +1,5 @@
-# Vector's global settings. The pipelines are in security.yaml (slice 1)
-# and host-metrics.yaml (slice 3); compose loads all three.
+# Vector's global settings. The pipelines are in security.yaml (slice 1),
+# host-metrics.yaml (slice 3) and version-drift.yaml; compose loads all four.
 
 data_dir: /var/lib/vector
 

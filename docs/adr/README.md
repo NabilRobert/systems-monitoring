@@ -35,6 +35,7 @@ others were rejected.
 | [ADR-010](0010-reuse-project-6-traces.md) | Reuse Project 6's traces by linking, never copying |
 | [ADR-011](0011-memory-budget.md) | Memory budget |
 | [ADR-012](0012-frameworks-and-plain-code.md) | Frameworks and plain code |
+| [ADR-013](0013-version-drift-check.md) | Version drift check, in Vector |
 
 ## Open, for Arthur
 

@@ -4,14 +4,15 @@ global:
   scrape_interval: 30s
 
 scrape_configs:
-  # One blackbox probe per target in deploy/targets/*.yml. Each target
-  # carries an `app` label, which alerts and SLOs use.
+  # One blackbox probe per target in deploy/targets/apps.yml. Each target
+  # carries an `app` label, which alerts and SLOs use. Named, not *.yml:
+  # versions.yml beside it is the version check's list, not probe targets.
   - job_name: probe
     metrics_path: /probe
     params:
       module: [http_2xx]
     file_sd_configs:
-      - files: [/etc/victoriametrics/targets/*.yml]
+      - files: [/etc/victoriametrics/targets/apps.yml]
     relabel_configs:
       - source_labels: [__address__]
         target_label: __param_target

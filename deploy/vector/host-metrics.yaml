@@ -31,7 +31,7 @@ transforms:
 sinks:
   to_victoriametrics:
     type: prometheus_remote_write
-    inputs: [host_metrics_tidy]
+    inputs: [host_metrics_tidy, version_known_metrics, version_unknown_metrics]
     endpoint: http://victoriametrics:8428/api/v1/write
     healthcheck:
       enabled: false

@@ -1,0 +1,8 @@
+# Copy to deploy/targets/versions.yml on the server and fill in the domain.
+# versions.yml is git-ignored: the repo names no server or domain.
+# One entry per app that reports its running commit as `version` in a JSON
+# health answer (ADR-013). `app` should match the app's entry in apps.yml.
+# `repo` is the public GitHub repository the app is deployed from.
+- app: mcp-backbone
+  version_url: https://<mcp-backbone-domain>/healthz
+  repo: NabilRobert/MCP-backbone

@@ -13,6 +13,9 @@ planning docs say *why*; this says *what happens where*.
   disk and containers; VictoriaMetrics stores those numbers for 30 days;
   vmalert checks them against rules (an app down, a disk filling, an SLO
   budget burning).
+- **Version drift:** every 15 minutes Vector asks each app which commit it's
+  running, and GitHub how far `main` has moved past that. A silent message
+  follows if an app stays behind for a day.
 - **Delivery:** Alertmanager, Prometheus's alert router, groups every
   alert and sends it to Arthur's phone through a Telegram bot.
 
@@ -102,7 +105,7 @@ flowchart LR
 
 1. **VictoriaMetrics asks blackbox to probe each target:**
    `deploy/victoriametrics/scrape.yml`, job `probe`, reads the targets from
-   `deploy/targets/*.yml` (on the server only) and calls
+   `deploy/targets/apps.yml` (on the server only) and calls
    `blackbox:9115/probe?target=…` every 30 s.
 2. **blackbox fetches the URL:** `deploy/blackbox/blackbox.yml`, module
    `http_2xx`: success means 200 within 5 s. It answers with
@@ -122,6 +125,46 @@ flowchart LR
 
 The host alerts work the same way, from the `host_*` numbers Vector
 pushes (`deploy/vector/host-metrics.yaml`).
+
+## The third flow: a merge that never got deployed
+
+```mermaid
+flowchart LR
+    T["targets/versions.yml<br/>(every 15 min)"] --> A["read_live<br/>GET the app's health URL"]
+    A --> P["parse_live<br/>a commit hash, or a reason"]
+    P --> G["read_github<br/>GET compare/commit...main"]
+    G --> J["judge<br/>commits behind, or a reason"]
+    J -->|remote write| B["VictoriaMetrics"]
+    B --> C["vmalert<br/>(rules every 5 min)"]
+    C -->|"LiveVersionBehind"| D["Alertmanager → Telegram, silently"]
+```
+
+Every step up to `judge` is in `deploy/vector/version-drift.yaml`.
+
+1. **The list is read:** source `version_targets` runs `cat` on
+   `/etc/vector-targets/versions.yml` every 15 minutes, and `version_apps`
+   turns it into one event per app.
+2. **The app says what it's running:** `version_read_live` fetches the app's
+   `version_url`. An app that can't be reached gets the reason
+   `app_unreachable`, and the rest of the steps leave it alone.
+3. **The answer is checked:** `version_parse_live` keeps `version` only if it's
+   a commit hash; anything else is `version_missing`. So nothing an app says
+   can change the GitHub URL.
+4. **GitHub compares:** `version_read_github` calls
+   `/repos/<repo>/compare/<commit>...main`.
+5. **The verdict:** `version_judge` takes `ahead_by`, the commits on `main`
+   that the live build lacks. Only an integer from GitHub counts. A 404 is
+   `unknown_commit`, and any other answer is `github_error`.
+6. **Into metrics:** `version_results` splits known from unknown, and the two
+   `log_to_metric` stages make `app_version_commits_behind{app}` and
+   `app_version_check_unknown{app,reason}`. The sink in `host-metrics.yaml`
+   pushes them.
+7. **vmalert decides:** `deploy/vmalert/rules.yml`, group `version-drift`.
+   `LiveVersionBehind` needs every check for 24 hours above 0. So one check
+   in date (a deploy) restarts the wait, and a merge deployed the next
+   morning never alerts. Failed checks leave gaps, which change nothing.
+8. **Alertmanager sends it silently,** like any other `ticket`, and ✅ Resolved
+   follows at the first check after a deploy.
 
 ## Glossary
 
@@ -154,6 +197,11 @@ pushes (`deploy/vector/host-metrics.yaml`).
 | **VictoriaMetrics, vmalert, vmui** | The metrics store; its rule evaluator; its built-in query page | `deploy/compose.yaml` |
 | **blackbox_exporter, probe** | A tool that fetches a URL from outside the app and reports whether it worked | `deploy/blackbox/` |
 | **Scrape, remote write** | Pulling numbers from a service on a schedule; pushing them to the store | `scrape.yml`; `to_victoriametrics` |
+| **Version drift, commits behind** | A live app running an older commit than GitHub `main`; how many commits `main` has that it lacks | `deploy/vector/version-drift.yaml` |
+| **Compare endpoint** | GitHub's API call that relates two commits. `ahead_by` is the number used here | `version_read_github` |
+| **Grace period** | How long an app may stay behind before anyone is told: 24 hours, so a routine deploy never alerts | `LiveVersionBehind` |
+| **Unknown** (version check) | The check couldn't get an answer. Never treated as in date | `app_version_check_unknown` |
+| **Rate limit** | GitHub allows 60 calls an hour per address without a token. This uses 4 per app | `exec_interval_secs` in `version-drift.yaml` |
 | **Inhibit rule** | "While alert A fires, hold back alert B" | `inhibit_rules` in `alertmanager.yml` |
 | **Out-of-memory kill** | The kernel ending a process because memory ran out, or a container hit its cap | `OutOfMemoryKill` |
 | **Digest pinning** | Naming a Docker image by its content hash, so it can't change underneath us | `image: …@sha256:…` |
@@ -171,6 +219,8 @@ pushes (`deploy/vector/host-metrics.yaml`).
 | Change who gets what, or how loud | `route:` and `receivers:` in `deploy/alertmanager/alertmanager.yml` | Update `e2e/test_routes.py` |
 | Add a new rule | A branch in `parse` (if it's a new line shape) and a `*_alerts` transform in `security.yaml`; a test in `deploy/vector/tests/`; a runbook in `docs/runbooks/` and a row in its README; an end-to-end test | `tests/test_runbooks.py` fails until the runbook exists |
 | Probe a new app (Juku) | A target with an `app` label in `deploy/targets/apps.yml` on the server | VictoriaMetrics picks it up within a minute |
+| Check another app's version | An entry in `deploy/targets/versions.yml` on the server, with `app`, `version_url` and `repo`. The app must report its commit as `version` | The next check picks it up, within 15 minutes |
+| Change the version grace period | `[24h]` and `23 * 3600` in `LiveVersionBehind`, `deploy/vmalert/rules.yml` | Update `deploy/vmalert/tests/version_test.yml` |
 | Change an uptime, disk, memory or SLO threshold | The rule in `deploy/vmalert/rules.yml` | Update its test in `deploy/vmalert/tests/` and its runbook |
 | Add a metric alert | A rule with `severity`, `summary` and `runbook_url` in `rules.yml`; a test in `deploy/vmalert/tests/`; a runbook and a row in the runbooks' README | `tests/test_runbooks.py` checks the runbook |
 | Silence alerts during maintenance | Nothing: `amtool silence add …` (in `docs/runbook-deploy.md`) | — |

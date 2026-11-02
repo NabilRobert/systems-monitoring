@@ -3,7 +3,8 @@
 #
 # Inputs, all in VictoriaMetrics:
 # - probe_* from blackbox_exporter (scraped every 30 s), labelled `app`;
-# - host_* from Vector's host_metrics source (pushed every 30 s).
+# - host_* from Vector's host_metrics source (pushed every 30 s);
+# - app_version_* from Vector's version check (pushed every 15 minutes).
 #
 # Every alert is a *state*: it stays firing while true and Alertmanager
 # sends "Resolved" when it stops. vmalert adds `host` from its
@@ -103,6 +104,54 @@ groups:
         annotations:
           summary: "Vector has sent no host metrics for 5 minutes: security alerts may not be working"
           runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/monitoring-pipeline-silent.md
+
+  # Is each live app running what's on GitHub `main`? (ADR-013). All three
+  # are tickets: none of them means anything is broken right now.
+  - name: version-drift
+    interval: 5m
+    rules:
+      - alert: LiveVersionBehind
+        # Behind at every check for a day: one check in date restarts the
+        # wait, and a gap in the checks doesn't (ADR-013 says why not `for`).
+        # The oldest sample has to be a day old, or a fresh install would
+        # fire on its first check. 23 h, as the window's oldest sample is up
+        # to one check younger than the window.
+        expr: |
+          min by (app) (min_over_time(app_version_commits_behind[24h])) > 0
+          and on (app)
+          max by (app) (time() - tfirst_over_time(app_version_commits_behind[24h])) > 23 * 3600
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.app }} has been behind GitHub main for a day, by at least {{ $value }} commits: it needs a deploy"
+          runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/version-drift.md
+
+      - alert: LiveVersionUnknown
+        # Every check unknown for 6 hours: longer than a rate limit (an hour)
+        # or a typical GitHub incident. The window holds two checks, so one
+        # good check clears it.
+        expr: |
+          max by (app, reason) (max_over_time(app_version_check_unknown[30m]))
+          unless on (app)
+          count by (app) (count_over_time(app_version_commits_behind[30m]))
+        for: 6h
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Can't tell which version {{ $labels.app }} is running ({{ $labels.reason }}): every check failed for 6 hours"
+          runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/version-drift.md
+
+      - alert: VersionCheckNotRunning
+        # Neither result for an hour: the check itself isn't running, most
+        # likely targets/versions.yml is missing or broken.
+        expr: absent_over_time({__name__=~"app_version_commits_behind|app_version_check_unknown"}[1h])
+        # Not in the minutes before the first check after a deploy.
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "The version drift check has reported nothing for an hour: check targets/versions.yml"
+          runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/version-drift.md
 
   # Availability SLO: 99.5% of probes succeed over 28 days (ADR-008), so
   # the error budget is 0.5%. A burn rate of 1 spends it in exactly 28 days.
