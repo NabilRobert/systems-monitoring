@@ -3,11 +3,21 @@
 For Arthur, on the shared server. About an hour, most of it step 7.
 Nothing in this repo deploys itself; every step is run by hand.
 
-**What gets installed:** two containers, both read-only, with no
-capabilities and nothing reachable from outside:
+The steps follow the slices: 1 to 8 install security alerts, 9 adds metrics
+and probes, and 10 adds the version check. **Installing from scratch**
+today, everything comes at once, so do it in this order:
+0 to 5; then create both target files (9.2 and 10.2); then 9.3 and 10.3;
+then 6, which starts all five containers; then 7; then 9.5 to 9.7 and 10.5
+to 10.7. Steps 9.1, 9.4, 10.1 and 10.4 are for updating an existing install.
+
+**What gets installed:** five containers, all read-only, with no
+capabilities and nothing reachable from outside (ADR-011 has the 368 MB of
+memory caps):
 - `alertmanager` (capped at 48 MB), on `127.0.0.1:9093` only;
 - `vector` (capped at 128 MB), which reads `/var/log` read-only and the host's
-  `/proc/net/tcp`, and listens only on loopback (its health check).
+  `/proc/net/tcp`, and listens only on loopback (its health check);
+- `victoriametrics` (128 MB) on `127.0.0.1:8428` only, `vmalert` and
+  `blackbox` (32 MB each), unpublished.
 
 **What it never does:** change the firewall, SSH, accounts or any other
 security setting. It only reads and reports.
@@ -18,6 +28,9 @@ this repo.
 ## 0. Before you start
 
 - [ ] Docker and the compose plugin are installed (`docker compose version`).
+- [ ] About 400 MB of memory to spare (`free -m`, the `available` column).
+- [ ] If `docker ps` says `permission denied`, put `sudo` before every
+      `docker` command below.
 - [ ] You know which log the server writes (step 3).
 - [ ] If fail2ban or CrowdSec runs on the server, step 7's failed-login
       test could ban your own address. Run that part from another
@@ -110,10 +123,12 @@ it's meant to be public: usually `22,80,443`), or note it as something
 to bind to `127.0.0.1` later. Then check the rules with your settings:
 
 ```bash
-docker compose run --rm --no-deps vector validate --skip-healthchecks /etc/vector/vector.yaml /etc/vector/security.yaml /etc/vector/host-metrics.yaml
+docker compose run --rm --no-deps vector validate --skip-healthchecks /etc/vector/vector.yaml /etc/vector/security.yaml /etc/vector/host-metrics.yaml /etc/vector/version-drift.yaml
 ```
 
-Expect `Validated`.
+Expect `Validated`. Name all four files every time: host-metrics.yaml's sink
+takes the version check's metrics, so leaving one out fails with an unknown
+input.
 
 ## 5. Check the Alertmanager config
 
@@ -130,7 +145,8 @@ docker compose up -d
 docker compose ps
 ```
 
-Both should be `Up`, and `vector` `(healthy)` within a minute.
+Each should be `Up` (two before slice 3, five after), and `vector`
+`(healthy)` within a minute.
 `docker compose logs vector` should show `Found new file to watch`
 with `file=/host/log/auth.log`.
 
@@ -257,7 +273,9 @@ outbound HTTPS. No token is involved. Details: [the runbook](runbooks/version-dr
 
 5. **Look:** in vmui (step 9's tunnel), a minute later, query
    `last_over_time(app_version_commits_behind[1h])`: one series for
-   `mcp-backbone`. If the live server is behind, the number is how far.
+   `mcp-backbone`. If the live server is behind, the number is how far:
+   every merge since the running commit counts, deploy scripts and docs
+   too, and an app reports a new version only once it restarts.
    `last_over_time(app_version_check_unknown[1h])` should be empty.
 6. **Expect** a 🟡 **LiveVersionBehind** about a day later if the app is still
    behind then, and nothing if it's in date. A deploy clears it at the next
