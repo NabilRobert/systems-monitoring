@@ -163,6 +163,10 @@ Note the time you do each, and the time the message arrives.
 | 5 | `python3 -m http.server 18999 --bind 0.0.0.0`, wait a minute, then Ctrl-C | 🔴 NewListeningPort `0.0.0.0:18999`, then ✅ Resolved about two minutes after stopping |
 | 6 | From your laptop (see step 0 about bans): `for i in $(seq 25); do ssh -o BatchMode=yes -o PreferredAuthentications=none -o ConnectTimeout=5 nosuchuser@<server> true; done` | 🟡 SSHFailedLoginBurst, silently |
 
+Row 4 needs sudo to ask for a password. Cloud images often give the
+default user passwordless sudo: if `sudo -k; sudo -n true && echo
+passwordless` prints `passwordless`, skip row 4 (it can't fire there).
+
 If one doesn't arrive, follow
 [runbooks/test-alert.md](runbooks/test-alert.md).
 
@@ -225,10 +229,13 @@ always-on total becomes 368 MB of caps.
    can't succeed to `targets/apps.yml`,
 
    ```yaml
-   - targets: ["https://<pitstop-demo-domain>/no-such-page"]
+   - targets: ["https://<mcp-backbone-domain>/no-such-page"]
      labels:
        app: drill
    ```
+
+   Any domain already in `apps.yml` works; the page just has to answer
+   something other than 200.
 
    wait (VictoriaMetrics reloads targets within a minute; the alert needs
    3 minutes of failures), and expect 🔴 **AppDown** about 4–5 minutes
