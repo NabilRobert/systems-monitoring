@@ -1,0 +1,36 @@
+# Unit tests for host_metrics_tidy in ../host-metrics.yaml, run with
+# `vector test` (e2e/test_vector_rules.py). Which cgroups Vector walks is
+# Vector's own code: e2e/test_e2e_2_metrics.py checks a container's
+# series arrives.
+
+tests:
+  - name: a container's memory keeps its cgroup and loses the hostname
+    inputs:
+      - insert_at: host_metrics_tidy
+        type: metric
+        metric:
+          name: cgroup_memory_current_bytes
+          namespace: host
+          kind: absolute
+          gauge: {value: 1048576}
+          tags: {cgroup: "system.slice/docker-0123abcd.scope", host: real-hostname, collector: cgroups}
+    outputs:
+      - extract_from: host_metrics_tidy
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.tags.cgroup, "system.slice/docker-0123abcd.scope")
+              assert!(!exists(.tags.host))
+              assert!(!exists(.tags.collector))
+
+  - name: the parent system.slice cgroup is dropped
+    inputs:
+      - insert_at: host_metrics_tidy
+        type: metric
+        metric:
+          name: cgroup_memory_current_bytes
+          namespace: host
+          kind: absolute
+          gauge: {value: 1048576}
+          tags: {cgroup: system.slice}
+    no_outputs_from: [host_metrics_tidy]

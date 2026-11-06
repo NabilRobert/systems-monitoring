@@ -86,7 +86,7 @@ that kept the whole always-on stack at **368 MB** of memory caps.
 
 | Check | What it proves |
 |---|---|
-| 55 rule tests (`vector test`) | Each security rule on real sshd, sudo (with or without a terminal) and `/proc/net/tcp` line shapes: what alerts, at what severity, with what text, and what stays quiet; crafted user names can't plant a false address. The version check on behind, in date, API errors, version missing and unknown commit |
+| 57 rule tests (`vector test`) | Each security rule on real sshd, sudo (with or without a terminal) and `/proc/net/tcp` line shapes, and which containers' memory is kept: what alerts, at what severity, with what text, and what stays quiet; crafted user names can't plant a false address. The version check on behind, in date, API errors, version missing and unknown commit |
 | 31 rule tests (`vmalert-tool unittest`) | Each uptime, host, SLO and version rule on made-up series over time (up to 3 days): when it fires, and when it must not, including right after a deploy |
 | 79 mutations of the rules | 21 of the security rules, 19 of the metric rules, 37 of the version check (an error read as "in date", a page instead of a ticket, a shorter grace period) and 2 of the runbook links: each makes a test fail |
 | 7 routing tests | `amtool` from the pinned image: the config is valid, and each kind of alert reaches the right receiver |
