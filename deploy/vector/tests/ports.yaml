@@ -33,6 +33,8 @@ tests:
               assert_eq!(.annotations.summary, "New listening TCP port 0.0.0.0:8080, not in the allow-list")
               left = to_unix_timestamp(parse_timestamp!(.endsAt, "%+")) - to_unix_timestamp(now())
               assert!(left >= 88 && left <= 90)
+              started = to_unix_timestamp(now()) - to_unix_timestamp(parse_timestamp!(.startsAt, "%+"))
+              assert!(started >= 0 && started <= 2)
 
   - name: an ipv6 listener is shown in brackets
     inputs:

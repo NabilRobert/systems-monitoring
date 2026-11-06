@@ -87,6 +87,8 @@ transforms:
   by_kind:
     type: route
     inputs: [parse]
+    # The two routes cover every kind, so nothing is unmatched.
+    reroute_unmatched: false
     route:
       event: '.kind != "ssh_failure"'
       failure: '.kind == "ssh_failure"'
@@ -263,6 +265,9 @@ transforms:
           "summary": "New listening TCP port " + shown + ":" + to_string(port) + ", not in the allow-list",
           "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/new-listening-port.md",
         },
+        # Without startsAt, Alertmanager copies endsAt into it and the alert
+        # starts in the future. Re-sends keep the earliest startsAt.
+        "startsAt": format_timestamp!(now(), format: "%+"),
         "endsAt": format_timestamp!(from_unix_timestamp!(to_unix_timestamp(now()) + 3 * interval), format: "%+"),
       }
 
@@ -272,7 +277,8 @@ transforms:
     inputs: [event_alerts, burst_once_per_window, flood_once_per_window, port_alerts]
     source: |
       payload = {"labels": .labels, "annotations": .annotations}
-      # Only states (open ports) carry an end time; see event_alerts.
+      # Only states (open ports) carry a start and end time; see event_alerts.
+      if exists(.startsAt) { payload.startsAt = .startsAt }
       if exists(.endsAt) { payload.endsAt = .endsAt }
       . = payload
 

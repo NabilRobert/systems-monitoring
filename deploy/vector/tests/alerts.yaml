@@ -172,13 +172,13 @@ tests:
     inputs:
       - insert_at: alertmanager_payload
         type: log
-        log_fields: {addr: 198.51.100.9, "labels.alertname": X, "annotations.summary": y, endsAt: "2026-10-28T03:05:00+00:00"}
+        log_fields: {addr: 198.51.100.9, "labels.alertname": X, "annotations.summary": y, startsAt: "2026-10-28T03:03:30+00:00", endsAt: "2026-10-28T03:05:00+00:00"}
     outputs:
       - extract_from: alertmanager_payload
         conditions:
           - type: vrl
             source: |
-              assert_eq!(keys(.), ["annotations", "endsAt", "labels"])
+              assert_eq!(keys(.), ["annotations", "endsAt", "labels", "startsAt"])
 
   - name: an event is sent without an end time
     inputs:
