@@ -159,6 +159,35 @@ tests:
               assert_eq!(.kind, "sudo_refused")
               assert_eq!(.reason, "3 incorrect password attempts")
 
+  - name: a sudo command run without a terminal is parsed
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-11-06T10:00:00+07:00 web-1 sudo:   ubuntu : PWD=/home/ubuntu ; USER=root ; COMMAND=/usr/bin/true"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "sudo")
+              assert_eq!(.user, "ubuntu")
+              assert_eq!(.command, "/usr/bin/true")
+
+  - name: a sudo refusal without a terminal keeps its reason
+    inputs:
+      - insert_at: parse
+        type: log
+        log_fields:
+          message: "2026-11-06T10:00:00+07:00 web-1 sudo:   ubuntu : a password is required ; PWD=/home/ubuntu ; USER=root ; COMMAND=/usr/bin/true"
+    outputs:
+      - extract_from: parse
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.kind, "sudo_refused")
+              assert_eq!(.reason, "a password is required")
+
   - name: session messages and other programs are ignored
     inputs:
       - insert_at: parse

@@ -73,7 +73,11 @@ transforms:
           if port == null { port = line }
           . = {"kind": "ssh_failure", "addr": addr, "port": port, "line": line, "timestamp": received}
         } else {
-          sudo, err = parse_regex(msg, r'^sudo\s+(?P<user>\S+) : (?:(?P<reason>[^;]*?) ; )?TTY=\S+ ; PWD=.*? ; USER=(?P<run_as>\S+) ;(?: [A-Z]+=.*? ;)* COMMAND=(?P<command>.*)$')
+          # sudo leaves TTY= out when it runs without a terminal (scripts,
+          # `ssh host 'sudo …'`, agents), so the field is optional: those
+          # commands must alert too. A refusal reason never contains "=",
+          # which keeps "TTY=pts/0" from being read as one.
+          sudo, err = parse_regex(msg, r'^sudo\s+(?P<user>\S+) : (?:(?P<reason>[^;=]*?) ; )?(?:TTY=\S+ ; )?PWD=.*? ; USER=(?P<run_as>\S+) ;(?: [A-Z]+=.*? ;)* COMMAND=(?P<command>.*)$')
           if err != null { abort }
           kind = if sudo.reason == null || sudo.reason == "" { "sudo" } else { "sudo_refused" }
           . = merge({"kind": kind, "line": line, "timestamp": received}, sudo)
