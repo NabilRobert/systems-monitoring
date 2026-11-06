@@ -17,7 +17,10 @@ sources:
         includes: ["/"]
     cgroups:
       groups:
-        includes: ["system.slice/docker-*"]
+        # Vector filters while it walks the tree, so the parent has to be
+        # included too or it never reaches the containers below it.
+        # host_metrics_tidy drops the parent's own series.
+        includes: ["system.slice", "system.slice/docker-*"]
 
 transforms:
   # The real hostname stays out of the metrics: alerts carry HOST_LABEL.
@@ -25,6 +28,7 @@ transforms:
     type: remap
     inputs: [host]
     source: |
+      if .tags.cgroup == "system.slice" { abort }
       del(.tags.host)
       del(.tags.collector)
 

@@ -15,6 +15,9 @@ def test_host_metrics_from_vector_reach_victoriametrics(stack: Path):
     assert wait_for_metric("host_load1")
     assert wait_for_metric('host_filesystem_used_ratio{mountpoint="/"}')
     assert wait_for_metric("host_memory_oom_kill_events_total")
+    # Vector only reaches the containers if their parent cgroup is included.
+    assert wait_for_metric('host_cgroup_memory_current_bytes{cgroup=~"system.slice/docker-.+"}')
+    assert query_metrics('host_cgroup_memory_current_bytes{cgroup="system.slice"}') == []
     # The real hostname is dropped; alerts carry HOST_LABEL instead.
     assert query_metrics('count({__name__=~"host_.+", host!=""})') == []
 
