@@ -167,6 +167,10 @@ Row 4 needs sudo to ask for a password. Cloud images often give the
 default user passwordless sudo: if `sudo -k; sudo -n true && echo
 passwordless` prints `passwordless`, skip row 4 (it can't fire there).
 
+A second alert of the same name and user within 5 minutes waits for
+the first one's group to send again (up to 5 minutes later), so leave a
+gap between repeats of a drill.
+
 If one doesn't arrive, follow
 [runbooks/test-alert.md](runbooks/test-alert.md).
 
