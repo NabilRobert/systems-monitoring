@@ -32,6 +32,24 @@ tests:
               summary: "mcp-backbone is down: every probe of https://mcp.test/healthz failed for 3 minutes"
               runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/app-down.md
 
+  # A new target that fails from its first probe waits for most of the
+  # window too, instead of paging on that first probe.
+  - interval: 30s
+    input_series:
+      - series: 'probe_success{job="probe",app="drill",instance="https://mcp.test/no-such-page"}'
+        values: "0x10"
+    alert_rule_test:
+      - eval_time: 1m30s
+        alertname: AppDown
+        exp_alerts: []
+      - eval_time: 2m30s
+        alertname: AppDown
+        exp_alerts:
+          - exp_labels: {app: drill, instance: "https://mcp.test/no-such-page", severity: page}
+            exp_annotations:
+              summary: "drill is down: every probe of https://mcp.test/no-such-page failed for 3 minutes"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/app-down.md
+
   # A flapping app (every other probe fails) is not "down".
   - interval: 30s
     input_series:

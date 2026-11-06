@@ -237,9 +237,9 @@ always-on total becomes 368 MB of caps.
    Any domain already in `apps.yml` works; the page just has to answer
    something other than 200.
 
-   wait (VictoriaMetrics reloads targets within a minute; the alert needs
-   3 minutes of failures), and expect 🔴 **AppDown** about 4–5 minutes
-   later. Remove the entry, and ✅ Resolved follows within a few minutes.
+   Then wait. VictoriaMetrics reloads targets within a minute, and the
+   alert needs most of 3 minutes of failures, so expect 🔴 **AppDown**
+   about 3–4 minutes after saving. Remove the entry, and ✅ Resolved follows within a few minutes.
 7. **Record** `docker stats --no-stream --format '{{.Name}} {{.MemUsage}}'`
    and send the session the five memory numbers and the AppDown delay
    (no domains or addresses).

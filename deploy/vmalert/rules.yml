@@ -16,7 +16,13 @@ groups:
     rules:
       - alert: AppDown
         # Every probe failed for 3 minutes: one bad probe isn't an outage.
-        expr: max by (app, instance) (max_over_time(probe_success{job="probe"}[3m])) == 0
+        # The count makes a new target (or one back after a gap) wait for
+        # most of the window too: 5 of its 6 probes at the 30 s scrape
+        # interval, with one to spare for a late scrape.
+        expr: >-
+          max by (app, instance) (max_over_time(probe_success{job="probe"}[3m])) == 0
+          and on (app, instance)
+          max by (app, instance) (count_over_time(probe_success{job="probe"}[3m])) >= 5
         labels:
           severity: page
         annotations:
