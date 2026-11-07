@@ -2,10 +2,24 @@
      Alertmanager renders this as an HTML template, so label and summary
      values are escaped by Alertmanager itself (e2e/test_e2e_1_security.py checks a
      summary containing tags). Events list only firing alerts; states also
-     list resolved ones. */}}
+     list resolved ones.
+
+     Layout: a headline (status, severity, readable alert name), one line of
+     context, a blank line, one bullet per alert with its time, then the
+     runbook as a link. Times are in Arthur's zone (WIB), not the server's. */}}
+{{ define "telegram.sm.time" }}{{ date "Jan 2 15:04" (tz "Asia/Jakarta" .) }}{{ end }}
+
 {{ define "telegram.sm.message" -}}
-{{ if eq .Status "firing" }}{{ if eq .CommonLabels.severity "page" }}🔴{{ else }}🟡{{ end }}{{ else }}✅ Resolved:{{ end }} <b>{{ .CommonLabels.alertname }}</b> on {{ .CommonLabels.host }}
-{{ range .Alerts.Firing }}• {{ .Annotations.summary }}
-{{ end }}{{ range .Alerts.Resolved }}• resolved: {{ .Annotations.summary }}
-{{ end }}Runbook: {{ (index .Alerts 0).Annotations.runbook_url }}
+{{ if eq .Status "firing" -}}
+{{ if eq .CommonLabels.severity "page" }}🔴 <b>PAGE</b>{{ else }}🟡 <b>TICKET</b>{{ end }}
+{{- else }}✅ <b>RESOLVED</b>{{ end }} · <b>{{ reReplaceAll "([a-z])([A-Z])" "$1 $2" (reReplaceAll "([A-Z]+)([A-Z][a-z])" "$1 $2" .CommonLabels.alertname) }}</b>
+<i>{{ .CommonLabels.host }}{{ with .CommonLabels.app }} · {{ . }}{{ end }}{{ with .CommonLabels.user }} · user {{ . }}{{ end }}{{ if gt (len .Alerts) 1 }} · {{ len .Alerts }} alerts{{ end }}</i>
+{{ with .Alerts.Firing }}
+{{ range . }}• {{ .Annotations.summary }}
+   <i>{{ if .Labels.event_id }}at{{ else }}since{{ end }} {{ template "telegram.sm.time" .StartsAt }}</i>
+{{ end }}{{ end }}{{ with .Alerts.Resolved }}
+{{ range . }}✓ {{ .Annotations.summary }}
+   <i>{{ template "telegram.sm.time" .StartsAt }} → {{ template "telegram.sm.time" .EndsAt }}</i>
+{{ end }}{{ end }}
+📖 <a href="{{ (index .Alerts 0).Annotations.runbook_url }}">Runbook</a>
 {{- end }}

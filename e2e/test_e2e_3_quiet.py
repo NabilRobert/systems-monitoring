@@ -1,6 +1,7 @@
 """End to end: what must *not* have alerted. Runs after the other e2e files
 (pytest orders them by name), so every caused alert has had time to arrive."""
 
+import re
 from pathlib import Path
 
 import pytest
@@ -23,5 +24,11 @@ def test_nothing_else_alerted(stack: Path):
         "SSHLogin", "SudoCommand", "SudoAuthFailure", "SSHFailedLoginBurst",
         "SSHFailedLoginFlood", "NewListeningPort", "DeliveryTest", "AppDown",
     }  # fmt: skip
-    names = {text_of(m).split("<b>", 1)[1].split("</b>", 1)[0] for m in messages()}
+    # The headline is "<status> · <b>Alert Name</b>": the name with spaces
+    # added between words, so they are taken out again here.
+    names: set[str] = set()
+    for message in messages():
+        headline = re.search(r"· <b>(.+?)</b>", text_of(message))
+        assert headline is not None, text_of(message)
+        names.add(headline.group(1).replace(" ", ""))
     assert names - expected == set()

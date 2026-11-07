@@ -74,8 +74,9 @@ Follow one line: `Accepted publickey for deploy from 203.0.113.7 port 51522`.
    case more alerts of the same kind and user arrive, then sends one
    message for the group.
 10. **The message is written:** `deploy/alertmanager/templates/telegram.tmpl`,
-    `telegram.sm.message`: 🔴, the alert name, the host, each summary, the
-    runbook link.
+    `telegram.sm.message`: a headline (`🔴 PAGE · SSH Login`), the host and
+    user, each summary with its time in WIB ("at" for an event, "since"
+    for a state), and a link to the runbook.
 11. **Telegram delivers it:** Alertmanager calls the bot API with the token
     and chat ID from `deploy/secrets/` (never committed).
 

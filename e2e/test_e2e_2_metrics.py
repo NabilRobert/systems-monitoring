@@ -60,8 +60,8 @@ def test_app_down_pages_then_resolves(stack: Path):
     compose("stop", "demo-app")
     stopped_at = time.time()
     # 3 minutes of failed probes, plus scrape, evaluation and grouping.
-    message = wait_for("<b>AppDown</b> on e2e-host", timeout=360)
+    message = wait_for("🔴 <b>PAGE</b> · <b>App Down</b>\n<i>e2e-host · demo-app</i>", timeout=360)
     assert "demo-app is down: every probe of http://demo-app:8080/health failed" in text_of(message)
     record_latency("AppDown after stopping the app", float(message["received_at"]) - stopped_at)  # pyright: ignore[reportArgumentType]
     compose("start", "demo-app")
-    wait_for("✅ Resolved: <b>AppDown</b>", timeout=240)
+    wait_for("✅ <b>RESOLVED</b> · <b>App Down</b>", timeout=240)
