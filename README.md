@@ -33,8 +33,8 @@ ready. The rest is planned in the [slice plan](docs/planning/slice-plan.md).
 | `SudoCommand` | Any `sudo` command | 🔴 buzzes |
 | `SudoAuthFailure` | `sudo` refused (wrong password, not in sudoers) | 🔴 buzzes |
 | `NewListeningPort` | A non-loopback TCP listener outside the allow-list | 🔴 buzzes, then ✅ when it closes |
-| `SSHFailedLoginBurst` | ≥ 20 failed logins from one address in 60 s | 🟡 silent |
 | `SSHFailedLoginFlood` | ≥ 200 failed logins from all addresses in 10 min | 🟡 silent |
+| *(no message)* | ≥ 20 failed logins from one address in 60 s | counted as `ssh_failed_login_bursts_total{source}` |
 
 Failed logins are silent on purpose: with key-only SSH they can't
 succeed, and every public server is scanned all day. A *successful*
@@ -86,7 +86,7 @@ that kept the whole always-on stack at **368 MB** of memory caps.
 
 | Check | What it proves |
 |---|---|
-| 57 rule tests (`vector test`) | Each security rule on real sshd, sudo (with or without a terminal) and `/proc/net/tcp` line shapes, and which containers' memory is kept: what alerts, at what severity, with what text, and what stays quiet; crafted user names can't plant a false address. The version check on behind, in date, API errors, version missing and unknown commit |
+| 58 rule tests (`vector test`) | Each security rule on real sshd, sudo (with or without a terminal) and `/proc/net/tcp` line shapes, and which containers' memory is kept: what alerts, at what severity, with what text, and what stays quiet; crafted user names can't plant a false address. The version check on behind, in date, API errors, version missing and unknown commit |
 | 32 rule tests (`vmalert-tool unittest`) | Each uptime, host, SLO and version rule on made-up series over time (up to 3 days): when it fires, and when it must not, including right after a deploy or for a target just added |
 | 79 mutations of the rules | 21 of the security rules, 19 of the metric rules, 37 of the version check (an error read as "in date", a page instead of a ticket, a shorter grace period) and 2 of the runbook links: each makes a test fail |
 | 7 routing tests | `amtool` from the pinned image: the config is valid, and each kind of alert reaches the right receiver |
@@ -134,7 +134,7 @@ uv run pytest -m e2e e2e/                                # Docker, about 12 minu
 
 | Path | What |
 |---|---|
-| `deploy/vector/` | The six security rules, the host metrics and the version drift check, with unit tests |
+| `deploy/vector/` | The security rules (five alerts and a burst count), the host metrics and the version drift check, with unit tests |
 | `deploy/vmalert/` | Uptime, host, SLO and version alert rules, with unit tests |
 | `deploy/victoriametrics/`, `deploy/blackbox/`, `deploy/targets/` | What is scraped and probed (the real targets stay on the server) |
 | `deploy/alertmanager/` | Routing, receivers, the inhibit rule and the Telegram message template |

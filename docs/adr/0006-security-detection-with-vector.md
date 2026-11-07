@@ -9,7 +9,7 @@ Part of the [architecture decisions](README.md).
 | `SSHLogin` | `Accepted <method> for <user> from <addr>` | `page`; `ticket` from a configured known network |
 | `SudoCommand` | `sudo: <user> : … COMMAND=…` | `page` |
 | `SudoAuthFailure` | `sudo: <user> : … incorrect password attempt(s)` | `page` |
-| `SSHFailedLoginBurst` | ≥ 20 failed logins from one address in 60 s | `ticket` |
+| `SSHFailedLoginBurst` | ≥ 20 failed logins from one address in 60 s | `ticket`; since 2026-11-07 a count, not a message (below) |
 | `SSHFailedLoginFlood` | ≥ 200 failed logins from all addresses in 10 min | `ticket` |
 | `NewListeningPort` | [ADR-007](0007-listening-ports-from-socket-snapshot.md) | `page` |
 
@@ -82,3 +82,14 @@ must be writable by its user.
   rotated log, a 10 KB line with non-Latin text, and an Alertmanager
   restart with an alert waiting.
 
+
+## Update, 2026-11-07: bursts are counted, not sent
+
+After the first day and a half on the server (about 2,000 failed
+attempts a day from about 70 addresses), bursts made about 10 silent
+messages that no one acted on: password login is off, so they can't
+succeed. Arthur chose to stop sending them. The burst rule still runs,
+and each burst adds one to `ssh_failed_login_bursts_total{source}` in
+VictoriaMetrics, so a targeted address can still be looked up. The flood
+alert is now the only failed-login message. Rejected: one message per
+address per day (still about 5 a day) and leaving it as it was.

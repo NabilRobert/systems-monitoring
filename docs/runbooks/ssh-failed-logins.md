@@ -1,24 +1,29 @@
-# SSHFailedLoginBurst, SSHFailedLoginFlood
+# SSHFailedLoginFlood (and the burst count)
 
 **Means:**
-- **Burst:** at least 20 failed SSH logins from **one** address within
-  60 s.
-- **Flood:** at least 200 from **all** addresses within 10 minutes.
+- **Flood** (the message): at least 200 failed SSH logins from **all**
+  addresses within 10 minutes.
+- **Burst** (no message since 2026-11-07, see ADR-006): at least 20 from
+  **one** address within 60 s. Each burst adds one to
+  `ssh_failed_login_bursts_total{source="<address>"}` in VictoriaMetrics.
 
 The numbers are in `deploy/vector/security.yaml` (`burst_groups`,
-`burst_alerts`, `flood_groups`, `flood_alerts`). The windows are close
+`burst_detected`, `flood_groups`, `flood_alerts`). The windows are close
 to, not exactly, sliding windows: a group that starts slowly is dropped
 and the count starts again.
 
-Each connection counts once, however many lines it logs. Both arrive
-silently (ticket), because with key-only SSH a failed attempt can't
+Each connection counts once, however many lines it logs. The flood
+arrives silently (ticket), because with key-only SSH a failed attempt can't
 succeed. What matters is a *successful* login, which always alerts on its
 own (`SSHLogin`).
 
 ## Is it expected?
 
 Background scanning hits every public server all day. Occasional bursts
-are normal. Look closer if:
+are normal. To see them, open vmui through the SSH tunnel (deploy
+runbook step 9.5) and query
+`topk(10, sum by (source) (increase(ssh_failed_login_bursts_total[24h])))`.
+Look closer if:
 - the attempts use **your real user names**, not `root`, `admin`,
   `oracle` and the like (someone knows something about this server);
 - an `SSHLogin` from an unknown address follows a burst;

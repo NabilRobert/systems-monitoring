@@ -21,8 +21,8 @@ def test_old_lines_and_allowed_ports_never_alert(stack: Path):
 def test_nothing_else_alerted(stack: Path):
     """No alert fired that no test caused (a startup false alarm, for example)."""
     expected = {
-        "SSHLogin", "SudoCommand", "SudoAuthFailure", "SSHFailedLoginBurst",
-        "SSHFailedLoginFlood", "NewListeningPort", "DeliveryTest", "AppDown",
+        "SSHLogin", "SudoCommand", "SudoAuthFailure", "SSHFailedLoginFlood",
+        "NewListeningPort", "DeliveryTest", "AppDown",
     }  # fmt: skip
     # The headline is "<status> · <b>Alert Name</b>": the name with spaces
     # added between words, so they are taken out again here.

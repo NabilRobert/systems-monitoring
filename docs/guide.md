@@ -32,15 +32,15 @@ flowchart LR
     C --> D{"by_kind<br/>(route)"}
     D -->|login, sudo,<br/>sudo refused| E["event_alerts"]
     D -->|failed login| F["one_per_connection<br/>(dedupe)"]
-    F --> G["burst_groups → burst_alerts<br/>→ burst_once_per_window"]
+    F --> G["burst_groups → burst_detected<br/>→ burst_once_per_window<br/>→ burst_metrics"]
     F --> H["flood_groups → flood_alerts<br/>→ flood_once_per_window"]
     P["/proc/net/tcp, tcp6<br/>(every 30 s)"] --> Q["sockets (exec source)<br/>→ port_alerts"]
     E --> X["alertmanager_payload"]
-    G --> X
     H --> X
     Q --> X
     X -->|"POST /api/v2/alerts"| Y["Alertmanager<br/>(route → receiver)"]
     Y -->|"sendMessage"| Z["Telegram bot → phone"]
+    G -->|"a count, no message"| V["VictoriaMetrics"]
 ```
 
 Follow one line: `Accepted publickey for deploy from 203.0.113.7 port 51522`.
@@ -83,10 +83,13 @@ Follow one line: `Accepted publickey for deploy from 203.0.113.7 port 51522`.
 **The other paths:**
 - **A failed login** goes to `one_per_connection`, which drops repeat
   lines about the same connection (address and port). Then
-  `burst_groups` collects up to 20 per address, `burst_alerts` keeps a
+  `burst_groups` collects up to 20 per address, `burst_detected` keeps a
   group only if it arrived within 60 s, and `burst_once_per_window`
-  stops a long attack from alerting more than once a minute. The flood
-  path does the same for all addresses: 200 in 10 minutes.
+  stops a long attack from counting more than once a minute. A burst
+  sends no message: `burst_metrics` adds one to
+  `ssh_failed_login_bursts_total{source="<address>"}` in VictoriaMetrics.
+  The flood path does the same for all addresses (200 in 10 minutes)
+  and sends a silent message.
 - **A new port:** every 30 s `sources.sockets` prints the kernel's socket
   tables; `transforms.port_alerts` decodes each listening socket's
   address, skips loopback and allowed ports, and alerts on the rest. The
@@ -214,7 +217,7 @@ Every step up to `judge` is in `deploy/vector/version-drift.yaml`.
 |---|---|---|
 | Allow a new public port | `SECURITY_ALLOWED_PORTS` in `deploy/.env` (on the server) | `docker compose up -d vector` |
 | Make your own logins silent | `SECURITY_KNOWN_NETWORKS` in `deploy/.env` | `docker compose up -d vector` |
-| Change the burst or flood thresholds | `deploy/vector/security.yaml`: `max_events` in `burst_groups` / `flood_groups` **and** `threshold` in `burst_alerts` / `flood_alerts` (keep them equal) | Update the tests in `deploy/vector/tests/` and the runbook |
+| Change the burst or flood thresholds | `deploy/vector/security.yaml`: `max_events` in `burst_groups` / `flood_groups` **and** `threshold` in `burst_detected` / `flood_alerts` (keep them equal) | Update the tests in `deploy/vector/tests/` and the runbook |
 | Change a message's wording | The summary in the matching `*_alerts` transform | Update its test in `deploy/vector/tests/` and `e2e/test_e2e_1_security.py` |
 | Change how messages look | `deploy/alertmanager/templates/telegram.tmpl` | Run the e2e tests |
 | Change who gets what, or how loud | `route:` and `receivers:` in `deploy/alertmanager/alertmanager.yml` | Update `e2e/test_routes.py` |

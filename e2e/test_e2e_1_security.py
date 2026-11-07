@@ -21,6 +21,7 @@ from e2e.stack import (
     parse_go_time,
     text_of,
     wait_for,
+    wait_for_metric,
     write_atomic,
 )
 
@@ -65,12 +66,11 @@ def test_sudo_refusal_pages(stack: Path):
     check(wait_for("sudo refused for mallory"), written, silent=False)
 
 
-def test_failed_login_burst_is_a_silent_ticket(stack: Path):
+def test_failed_login_burst_is_counted_not_sent(stack: Path):
     lines = [line(f"Invalid user admin{n} from 198.51.100.66 port {50000 + n}") for n in range(20)]
-    written = append(*lines)
-    message = wait_for("20 failed SSH logins from 198.51.100.66 in 60 s")
-    check(message, written, silent=True)
-    assert text_of(message).startswith("🟡 <b>TICKET</b> · <b>SSH Failed Login Burst</b>")
+    append(*lines)
+    # test_e2e_3_quiet.py checks that no burst message was sent.
+    assert wait_for_metric('ssh_failed_login_bursts_total{source="198.51.100.66"}')
 
 
 def test_failed_login_flood_is_a_silent_ticket(stack: Path):
