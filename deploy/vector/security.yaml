@@ -1,10 +1,10 @@
-# Security alerts: six detection rules as Vector configuration
-# (docs/adr, ADR-006). Loaded with vector.yaml and host-metrics.yaml. Vector reads the logs and the socket table;
+# Security alerts: five alert rules and a burst count as Vector
+# configuration (docs/adr, ADR-006). Loaded with vector.yaml and host-metrics.yaml. Vector reads the logs and the socket table;
 # Alertmanager (deploy/alertmanager/) groups and delivers what comes out.
 #
 #   auth log ─► parse ─┬─ events (login, sudo, sudo refused) ─────────────► to_alertmanager
-#                      └─ failed logins ─► one per connection ─┬─ burst ─► throttle ─┘
-#                                                              └─ flood ─► throttle ─┘
+#                      └─ failed logins ─► one per connection ─┬─ flood ─► throttle ─┘
+#                                                              └─ burst ─► throttle ─► count ─► to_victoriametrics
 #   /proc/net/tcp{,6} every 30 s ─► listeners outside the allow-list ───────┘
 #
 # The names and lists (host label, allowed ports, known networks) come from
@@ -161,7 +161,11 @@ transforms:
       kind: discard
       timestamp: array
 
-  burst_alerts:
+  # Bursts are counted, not messaged (2026-11-07): with key-only SSH they
+  # can't succeed, and at about 2,000 attempts a day they were noise. The
+  # count per address stays queryable in VictoriaMetrics; the flood is the
+  # failed-login message.
+  burst_detected:
     type: remap
     inputs: [burst_groups]
     source: |
@@ -171,22 +175,25 @@ transforms:
       if length(times) < threshold { abort }
       span = to_unix_timestamp(timestamp!(times[-1])) - to_unix_timestamp(timestamp!(times[0]))
       if span > window { abort }
-      . = {
-        "addr": .addr,
-        "labels": {"alertname": "SSHFailedLoginBurst", "severity": "ticket", "host": get_env_var("HOST_LABEL") ?? "server", "source": .addr, "event_id": uuid_v4()},
-        "annotations": {
-          "summary": to_string(length(times)) + " failed SSH logins from " + string!(.addr) + " in " + to_string(window) + " s",
-          "runbook_url": (get_env_var("SECURITY_RUNBOOK_BASE") ?? "https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks") + "/ssh-failed-logins.md",
-        },
-      }
+      . = {"source": .addr}
 
-  # A long attack alerts once per window, not once per group.
+  # A long attack counts once per window, not once per group.
   burst_once_per_window:
     type: throttle
-    inputs: [burst_alerts]
-    key_field: "{{ addr }}"
+    inputs: [burst_detected]
+    key_field: "{{ source }}"
     threshold: 1
     window_secs: 60
+
+  burst_metrics:
+    type: log_to_metric
+    inputs: [burst_once_per_window]
+    metrics:
+      - type: counter
+        field: source
+        name: ssh_failed_login_bursts_total
+        tags:
+          source: "{{ source }}"
 
   flood_groups:
     type: reduce
@@ -274,7 +281,7 @@ transforms:
   # Only Alertmanager's fields leave Vector.
   alertmanager_payload:
     type: remap
-    inputs: [event_alerts, burst_once_per_window, flood_once_per_window, port_alerts]
+    inputs: [event_alerts, flood_once_per_window, port_alerts]
     source: |
       payload = {"labels": .labels, "annotations": .annotations}
       # Only states (open ports) carry a start and end time; see event_alerts.

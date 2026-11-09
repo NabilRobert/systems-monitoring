@@ -47,7 +47,7 @@ def test_config_is_valid(tmp_path: Path):
         # Events: one-shot, never "resolved".
         ("alertname=SSHLogin severity=page event_id=a", "telegram-page-event"),
         ("alertname=SSHLogin severity=ticket event_id=a", "telegram-ticket-event"),
-        ("alertname=SSHFailedLoginBurst severity=ticket event_id=b", "telegram-ticket-event"),
+        ("alertname=SSHFailedLoginFlood severity=ticket event_id=b", "telegram-ticket-event"),
         # States: stay firing while true, then resolve.
         ("alertname=NewListeningPort severity=page", "telegram-page"),
         ("alertname=SomethingLater severity=ticket", "telegram-ticket"),

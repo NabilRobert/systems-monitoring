@@ -161,7 +161,7 @@ Note the time you do each, and the time the message arrives.
 | 3 | In it: `sudo true` | 🔴 SudoCommand `sudo: <you> ran as root: /usr/bin/true` |
 | 4 | `sudo -k` then `sudo true`, and type a wrong password three times | 🔴 SudoAuthFailure `3 incorrect password attempts` |
 | 5 | `python3 -m http.server 18999 --bind 0.0.0.0`, wait a minute, then Ctrl-C | 🔴 NewListeningPort `0.0.0.0:18999`, then ✅ Resolved about two minutes after stopping |
-| 6 | From your laptop (see step 0 about bans): `for i in $(seq 25); do ssh -o BatchMode=yes -o PreferredAuthentications=none -o ConnectTimeout=5 nosuchuser@<server> true; done` | 🟡 SSHFailedLoginBurst, silently |
+| 6 | From your laptop (see step 0 about bans): `for i in $(seq 25); do ssh -o BatchMode=yes -o PreferredAuthentications=none -o ConnectTimeout=5 nosuchuser@<server> true; done` | No message (bursts are counted, not sent). In vmui, `ssh_failed_login_bursts_total` shows your address |
 
 Row 4 needs sudo to ask for a password. Cloud images often give the
 default user passwordless sudo: if `sudo -k; sudo -n true && echo

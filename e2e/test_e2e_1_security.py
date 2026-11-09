@@ -21,6 +21,7 @@ from e2e.stack import (
     parse_go_time,
     text_of,
     wait_for,
+    wait_for_metric,
     write_atomic,
 )
 
@@ -32,8 +33,8 @@ def test_ssh_login_pages(stack: Path):
     message = wait_for("SSH login: deploy (publickey) from 203.0.113.7")
     check(message, written, silent=False)
     text = text_of(message)
-    assert text.startswith("🔴 <b>SSHLogin</b> on e2e-host")
-    assert "Runbook: https://example.org/runbooks/ssh-login.md" in text
+    assert text.startswith("🔴 <b>PAGE</b> · <b>SSH Login</b>\n<i>e2e-host · user deploy</i>")
+    assert '📖 <a href="https://example.org/runbooks/ssh-login.md">Runbook</a>' in text
 
 
 def test_login_from_known_network_is_silent(stack: Path):
@@ -65,12 +66,11 @@ def test_sudo_refusal_pages(stack: Path):
     check(wait_for("sudo refused for mallory"), written, silent=False)
 
 
-def test_failed_login_burst_is_a_silent_ticket(stack: Path):
+def test_failed_login_burst_is_counted_not_sent(stack: Path):
     lines = [line(f"Invalid user admin{n} from 198.51.100.66 port {50000 + n}") for n in range(20)]
-    written = append(*lines)
-    message = wait_for("20 failed SSH logins from 198.51.100.66 in 60 s")
-    check(message, written, silent=True)
-    assert text_of(message).startswith("🟡 <b>SSHFailedLoginBurst</b>")
+    append(*lines)
+    # test_e2e_3_quiet.py checks that no burst message was sent.
+    assert wait_for_metric('ssh_failed_login_bursts_total{source="198.51.100.66"}')
 
 
 def test_failed_login_flood_is_a_silent_ticket(stack: Path):
@@ -78,7 +78,7 @@ def test_failed_login_flood_is_a_silent_ticket(stack: Path):
     written = append(*lines)
     # The 20 failures of the burst test count too, so the threshold (200)
     # is crossed partway through these lines.
-    message = wait_for("<b>SSHFailedLoginFlood</b>")
+    message = wait_for("<b>SSH Failed Login Flood</b>")
     check(message, written, silent=True)
     assert "200 failed SSH logins from" in text_of(message)
     assert "addresses in 10 min" in text_of(message)
@@ -90,8 +90,8 @@ def test_new_listening_port_pages_then_resolves(stack: Path):
     message = wait_for("New listening TCP port 0.0.0.0:8080", timeout=120)
     check(message, written, silent=False)
     write_atomic(OUT / "net" / "tcp", TCP_BASE)
-    resolved = wait_for("✅ Resolved: <b>NewListeningPort</b>", timeout=240)
-    assert "resolved: New listening TCP port 0.0.0.0:8080" in text_of(resolved)
+    resolved = wait_for("✅ <b>RESOLVED</b> · <b>New Listening Port</b>", timeout=240)
+    assert "✓ New listening TCP port 0.0.0.0:8080" in text_of(resolved)
 
 
 def test_hand_sent_delivery_test_arrives(stack: Path):

@@ -22,12 +22,11 @@ RUNBOOK_SLUGS = (
 MANUAL_ALERTS = {"DeliveryTest"}
 
 
-def test_the_rules_define_all_six_alerts():
+def test_the_rules_define_all_five_alerts():
     assert ALERT_NAMES == {
         "SSHLogin",
         "SudoCommand",
         "SudoAuthFailure",
-        "SSHFailedLoginBurst",
         "SSHFailedLoginFlood",
         "NewListeningPort",
     }

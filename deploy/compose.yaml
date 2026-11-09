@@ -30,7 +30,7 @@ services:
     restart: unless-stopped
 
   vector:
-    # The six security rules, host and container metrics, and the version
+    # The security rules, host and container metrics, and the version
     # drift check (ADR-005, 006, 013).
     image: timberio/vector:0.59.0-alpine@sha256:0e36bc2a290039e9b6a5e92f04bd2f133223506f72d09682c1df16c015172b7a
     command:

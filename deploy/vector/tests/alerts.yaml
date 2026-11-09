@@ -1,5 +1,5 @@
-# Turning events into alerts: logins, sudo, bursts and floods, and what
-# is sent to Alertmanager.
+# Turning events into alerts: logins, sudo and floods, and what is sent
+# to Alertmanager; bursts, which are counted instead.
 #
 # Unit tests for the rules in ../security.yaml, run with `vector test`
 # (e2e/test_vector_rules.py runs them in the pinned image, with
@@ -100,9 +100,9 @@ tests:
           - type: vrl
             source: assert!(!exists(.endsAt))
 
-  - name: twenty failures from one address within a minute is a burst ticket
+  - name: twenty failures from one address within a minute is a burst
     inputs:
-      - insert_at: burst_alerts
+      - insert_at: burst_detected
         type: vrl
         source: |
           start = parse_timestamp!("2026-10-28T03:00:00Z", "%+")
@@ -110,34 +110,45 @@ tests:
           times = map_values(chunks!(encode_base16(random_bytes!(19)), 2)) -> |_v| { start }
           . = {"addr": "198.51.100.9", "timestamp": push(times, end)}
     outputs:
-      - extract_from: burst_alerts
+      - extract_from: burst_detected
         conditions:
           - type: vrl
             source: |
-              assert_eq!(.labels.alertname, "SSHFailedLoginBurst")
-              assert_eq!(.labels.severity, "ticket")
-              assert_eq!(.labels.source, "198.51.100.9")
-              assert_eq!(.annotations.summary, "20 failed SSH logins from 198.51.100.9 in 60 s")
+              assert_eq!(., {"source": "198.51.100.9"})
+
+  - name: a burst is counted per address, not sent as an alert
+    inputs:
+      - insert_at: burst_metrics
+        type: log
+        log_fields: {source: 198.51.100.9}
+    outputs:
+      - extract_from: burst_metrics
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.name, "ssh_failed_login_bursts_total")
+              assert_eq!(.tags.source, "198.51.100.9")
+              assert_eq!(.kind, "incremental")
 
   - name: nineteen failures is not a burst
     inputs:
-      - insert_at: burst_alerts
+      - insert_at: burst_detected
         type: vrl
         source: |
           start = parse_timestamp!("2026-10-28T03:00:00Z", "%+")
           . = {"addr": "198.51.100.9", "timestamp": map_values(chunks!(encode_base16(random_bytes!(19)), 2)) -> |_v| { start }}
-    no_outputs_from: [burst_alerts]
+    no_outputs_from: [burst_detected]
 
   - name: twenty failures spread over more than a minute is not a burst
     inputs:
-      - insert_at: burst_alerts
+      - insert_at: burst_detected
         type: vrl
         source: |
           start = parse_timestamp!("2026-10-28T03:00:00Z", "%+")
           end = parse_timestamp!("2026-10-28T03:01:01Z", "%+")
           times = map_values(chunks!(encode_base16(random_bytes!(19)), 2)) -> |_v| { start }
           . = {"addr": "198.51.100.9", "timestamp": push(times, end)}
-    no_outputs_from: [burst_alerts]
+    no_outputs_from: [burst_detected]
 
   - name: two hundred failures from many addresses within ten minutes is a flood ticket
     inputs:
