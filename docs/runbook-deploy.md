@@ -211,8 +211,9 @@ always-on total becomes 368 MB of caps.
    cp targets/apps.yml.example targets/apps.yml
    ```
 
-   Fill in the two domains. Each entry's `app` label is what the alerts
-   and SLOs use. Add Juku here once it's live.
+   Fill in the domains. Each entry's `app` label is what the alerts
+   and SLOs use. Add Juku here once it's live. A new entry is picked up
+   within a minute, with no restart.
 3. **Check the rules file** loads (this checks the rules only; step 4's
    `docker compose ps` shows whether vmalert itself started):
 

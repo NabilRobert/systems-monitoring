@@ -2,10 +2,11 @@
 
 Monitoring for small live apps on one shared server: security alerts,
 uptime, host health and availability SLOs with error budgets now;
-Juku's own SLOs and AI-specific signals once it is live. It watches three apps:
+Juku's own SLOs and AI-specific signals once it is live. It watches four apps:
 [MCP-backbone](https://github.com/NabilRobert/MCP-backbone), the
-[Pitstop](https://github.com/NabilRobert/pitstop-crew-public) demo, and
-Juku (a JLPT study assistant, not yet live).
+[Pitstop](https://github.com/NabilRobert/pitstop-crew-public) demo,
+[Framed](https://github.com/NabilRobert/author-website) (portfolio pages
+for anyone), and Juku (a JLPT study assistant, not yet live).
 
 [agent-observability](https://github.com/NabilRobert/agent-observability)
 answers "what happened in this request". This answers "is it working
