@@ -22,6 +22,24 @@ While it fires, the same app's SLO burn alerts are held back
 6. **One request:** a recent trace of the app in the trace viewer
    (Project 6) shows where requests stop.
 
+## Apps behind Cloudflare (Framed)
+
+The probe of Framed goes out to Cloudflare and back to the server, like a
+visitor's request. The status code it got tells you which hop failed:
+query `probe_http_status_code{app="framed"}` in vmui (0 means no answer
+within 5 s).
+
+| Code | Means | Look at |
+|---|---|---|
+| 502 | Caddy is up; the Framed container isn't answering | `docker compose -p framed ps`, then `docker compose -p framed logs --tail 100` |
+| 521, 522 | Cloudflare can't reach the server at all | Caddy (`systemctl status caddy`), the server itself; other apps will be down too |
+| 526 | Cloudflare rejects Caddy's certificate for Framed | `sudo journalctl -u caddy --since "-2d" \| grep -i framed` for a failed renewal |
+| 403 | Cloudflare challenged the prober as a bot; people are fine | Cloudflare's security events for the site |
+
+The page probe (`/`) proves the Node server answers. It doesn't touch
+Framed's database, so a broken database with a working server shows up as
+errors in the app, not here.
+
 ## What to do
 
 - Container stopped or crash-looping: read the last log lines, fix the

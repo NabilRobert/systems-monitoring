@@ -9,7 +9,7 @@ planning docs say *why*; this says *what happens where*.
   server's login log and its list of open ports and turns six kinds of
   security event into alerts.
 - **Uptime and health (slice 3):** blackbox_exporter checks each app's
-  health endpoint every 30 s; Vector also reports the server's memory,
+  health endpoint (or, for Framed, its home page) every 30 s; Vector also reports the server's memory,
   disk and containers; VictoriaMetrics stores those numbers for 30 days;
   vmalert checks them against rules (an app down, a disk filling, an SLO
   budget burning).
@@ -222,7 +222,7 @@ Every step up to `judge` is in `deploy/vector/version-drift.yaml`.
 | Change how messages look | `deploy/alertmanager/templates/telegram.tmpl` | Run the e2e tests |
 | Change who gets what, or how loud | `route:` and `receivers:` in `deploy/alertmanager/alertmanager.yml` | Update `e2e/test_routes.py` |
 | Add a new rule | A branch in `parse` (if it's a new line shape) and a `*_alerts` transform in `security.yaml`; a test in `deploy/vector/tests/`; a runbook in `docs/runbooks/` and a row in its README; an end-to-end test | `tests/test_runbooks.py` fails until the runbook exists |
-| Probe a new app (Juku) | A target with an `app` label in `deploy/targets/apps.yml` on the server | VictoriaMetrics picks it up within a minute |
+| Probe a new app (as Framed was; Juku next) | A target with an `app` label in `deploy/targets/apps.yml` on the server | VictoriaMetrics picks it up within a minute |
 | Check another app's version | An entry in `deploy/targets/versions.yml` on the server, with `app`, `version_url` and `repo`. The app must report its commit as `version` | The next check picks it up, within 15 minutes |
 | Change the version grace period | `[24h]` and `23 * 3600` in `LiveVersionBehind`, `deploy/vmalert/rules.yml` | Update `deploy/vmalert/tests/version_test.yml` |
 | Change an uptime, disk, memory or SLO threshold | The rule in `deploy/vmalert/rules.yml` | Update its test in `deploy/vmalert/tests/` and its runbook |

@@ -60,6 +60,29 @@ tests:
         alertname: AppDown
         exp_alerts: []
 
+  # A blip doesn't page: Framed (a page probe, "/") fails for 2 minutes
+  # (3m to 4m30s), say a Cloudflare hiccup, and recovers. When it fails
+  # again from 8m, it pages once the 3-minute window holds only failures:
+  # at 10m the window still reaches back to the success at 7m30s.
+  - interval: 30s
+    input_series:
+      - series: 'probe_success{job="probe",app="framed",instance="https://framed.test/"}'
+        values: "1x5 0x3 1x5 0x7"
+    alert_rule_test:
+      - eval_time: 4m30s
+        alertname: AppDown
+        exp_alerts: []
+      - eval_time: 10m
+        alertname: AppDown
+        exp_alerts: []
+      - eval_time: 10m30s
+        alertname: AppDown
+        exp_alerts:
+          - exp_labels: {app: framed, instance: "https://framed.test/", severity: page}
+            exp_annotations:
+              summary: "framed is down: every probe of https://framed.test/ failed for 3 minutes"
+              runbook_url: https://github.com/NabilRobert/systems-monitoring/blob/main/docs/runbooks/app-down.md
+
   # No prober for 5 minutes pages, whether it answers "down" or is missing.
   - interval: 30s
     input_series:

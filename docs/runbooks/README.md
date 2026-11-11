@@ -1,7 +1,7 @@
 # Runbooks
 
 One per alert. Each alert's message links its runbook. A test
-(`tests/test_config.py`) fails if an alert has none.
+(`tests/test_runbooks.py`) fails if an alert has none.
 
 | Alert | Severity | Runbook |
 |---|---|---|
